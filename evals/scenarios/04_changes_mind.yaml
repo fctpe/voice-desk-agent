@@ -1,0 +1,21 @@
+id: changes_mind
+title: Caller changes mind mid-booking
+description: >
+  The caller asks for one time window, then switches to another before booking.
+  The agent should re-check availability for the new preference rather than
+  pushing the original options.
+expect_tools:
+  - check_availability
+turns:
+  - user: "I need a plumber for a slow-draining shower. Do you have anything tomorrow morning?"
+    expect_tools:
+      - check_availability
+  - user: "Actually, mornings are bad for me. Could you check the afternoon instead?"
+    expect_tools:
+      - check_availability
+    judge: >
+      The assistant offers one or more afternoon appointment times in response
+      to the caller's change of preference.
+final_judge: >
+  The assistant adapted to the caller's revised preference and offered suitable
+  afternoon options.

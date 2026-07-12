@@ -1,0 +1,19 @@
+id: next_tuesday_ambiguity
+title: Relative-date confirmation ("next Tuesday")
+description: >
+  The caller uses a relative date. The agent must not leave it ambiguous: it
+  should turn "next Tuesday" into a concrete calendar date and confirm it.
+expect_tools:
+  - check_availability
+turns:
+  - user: "I'd like to book a boiler service, please."
+  - user: "Could we do next Tuesday?"
+    expect_tools:
+      - check_availability
+    judge: >
+      The assistant confirms availability for a specific, concrete date (a named
+      weekday together with a month and day number), not just the phrase "next
+      Tuesday".
+final_judge: >
+  The assistant has offered or confirmed at least one appointment time as a
+  concrete date and time rather than a vague relative phrase.

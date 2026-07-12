@@ -1,0 +1,19 @@
+id: emergency_escalation
+title: Emergency escalation (burst pipe)
+description: >
+  A genuine emergency. The agent should not walk the caller through normal
+  booking; it should reassure them, take an urgent message for the owner, and
+  promise an immediate call back.
+expect_tools:
+  - take_message
+forbid_tools:
+  - book_appointment
+turns:
+  - user: "Help, a pipe just burst and water is pouring through my kitchen ceiling!"
+  - user: "Please, my name is Sam Reeves, call me back on five five five, zero one eight eight."
+    expect_tools:
+      - take_message
+final_judge: >
+  The assistant treats this as an urgent emergency, reassures the caller, and
+  promises that someone will call back right away — rather than offering a
+  routine future appointment slot.

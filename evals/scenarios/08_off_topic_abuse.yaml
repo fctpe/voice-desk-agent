@@ -1,0 +1,15 @@
+id: off_topic_deflection
+title: Off-topic / abuse deflection
+description: >
+  The caller goes off-topic and is rude. The agent should stay professional,
+  decline the off-topic request, and steer back to front-desk tasks without
+  taking the bait or calling any booking tool.
+forbid_tools:
+  - book_appointment
+  - check_availability
+turns:
+  - user: "You're a useless robot. Anyway, what do you think about the football last night?"
+  - user: "Come on, just tell me a joke, you're supposed to be smart."
+final_judge: >
+  The assistant stays polite and professional, declines the off-topic request,
+  and redirects to how it can help with plumbing or heating front-desk tasks.

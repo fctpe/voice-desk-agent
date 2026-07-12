@@ -1,0 +1,19 @@
+id: cancel_appointment
+title: Cancel an appointment
+description: >
+  The caller books, then decides to cancel within the same call. The agent
+  should cancel the booking and confirm the cancellation.
+expect_tools:
+  - book_appointment
+  - cancel_appointment
+turns:
+  - user: "I'd like to book a drain cleaning for tomorrow. I'm Tom Fletcher, five five five, zero one four seven."
+  - user: "The first time works, book it please."
+    expect_tools:
+      - book_appointment
+  - user: "Actually, you know what, please cancel that appointment after all."
+    expect_tools:
+      - cancel_appointment
+final_judge: >
+  The assistant confirms the appointment has been cancelled and offers further
+  help.
