@@ -1,0 +1,51 @@
+[project]
+name = "voice-desk-agent"
+version = "0.1.0"
+description = "Riley — an AI voice front desk for field-service businesses, built on LiveKit Agents."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "Furkan" }]
+keywords = ["voice-agent", "livekit", "ai", "front-desk", "receptionist", "appointment-booking"]
+
+dependencies = [
+    "livekit-agents[cartesia,deepgram,openai,silero]>=1.6,<1.7",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+voice-desk = "voice_desk.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voice_desk"]
+
+[dependency-groups]
+# Installed by `uv sync` (dev group is on by default). Keeps lint + test
+# available without a separate install step.
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "evals"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["B008"]  # function-call default args are idiomatic for @function_tool signatures
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
