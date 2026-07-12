@@ -1,0 +1,18 @@
+id: no_slot_alternative
+title: Requested day unavailable, alternative offered
+description: >
+  The caller asks for a day the business is closed (Sunday). The agent should
+  not invent a slot; it should explain there's nothing then and offer the
+  nearest real alternatives.
+expect_tools:
+  - check_availability
+forbid_tools:
+  - book_appointment
+turns:
+  - user: "Do you have anything this Sunday for a radiator that won't heat up?"
+    expect_tools:
+      - check_availability
+  - user: "Ah okay. What's the soonest you could do instead?"
+final_judge: >
+  The assistant makes clear there is no Sunday availability (the business is
+  closed then) and offers one or more concrete alternative times on other days.

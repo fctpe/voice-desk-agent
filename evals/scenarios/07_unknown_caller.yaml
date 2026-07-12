@@ -1,0 +1,14 @@
+id: unknown_caller
+title: Unknown caller — capture name and phone with read-back
+description: >
+  A caller whose number isn't on file. The agent should capture the caller's
+  name and phone number and read the number back digit by digit to confirm it.
+turns:
+  - user: "Hello, I'd like to arrange for someone to come out about low water pressure."
+  - user: "My number is five five five, zero one seven three, and my name is Dana Whitfield."
+    judge: >
+      The assistant reads the phone number back to the caller digit by digit (or
+      clearly repeats each digit) to confirm it was captured correctly.
+final_judge: >
+  The assistant has captured the caller's name and phone number and confirmed
+  the number back to them.

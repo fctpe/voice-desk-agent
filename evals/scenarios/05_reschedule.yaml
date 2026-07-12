@@ -1,0 +1,21 @@
+id: reschedule_existing
+title: Reschedule an appointment
+description: >
+  The caller books, then within the same call needs to move the appointment to
+  a different day. The agent should check new availability and reschedule the
+  existing booking rather than creating a duplicate.
+expect_tools:
+  - book_appointment
+  - reschedule_appointment
+turns:
+  - user: "Hi, I'd like to book a heating check for tomorrow afternoon. Name's Priya Shah, number five five five, zero one two one."
+  - user: "Yes, the first afternoon option is perfect, book that please."
+    expect_tools:
+      - book_appointment
+  - user: "Sorry, something came up. Can we move it to Friday instead?"
+  - user: "Yes, that Friday time works, please move it."
+    expect_tools:
+      - reschedule_appointment
+final_judge: >
+  The assistant confirms the appointment has been moved to the new day and
+  time.

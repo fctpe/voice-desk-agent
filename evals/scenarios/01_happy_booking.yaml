@@ -1,0 +1,23 @@
+id: happy_booking
+title: Happy path booking
+description: >
+  A straightforward new-appointment request. The agent should check real
+  availability, offer concrete times, collect the caller's details, book one of
+  the offered slots, and send a confirmation.
+expect_tools:
+  - check_availability
+  - book_appointment
+turns:
+  - user: "Hi, I've got a leaking tap under my kitchen sink I'd like someone to look at."
+  - user: "Tomorrow morning would be ideal if you have anything."
+    expect_tools:
+      - check_availability
+  - user: >
+      The first time you said works great. My name is Alan Carter, and the best
+      number for me is five five five, zero one nine nine.
+  - user: "Yes, that's all correct, please go ahead and book it."
+    expect_tools:
+      - book_appointment
+final_judge: >
+  The assistant confirms a booked appointment, stating a concrete day and time,
+  and indicates a confirmation is being sent.
