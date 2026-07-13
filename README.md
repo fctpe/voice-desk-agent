@@ -17,6 +17,8 @@ invented, and the calendar is a deterministic in-memory fake **by design** (see
 [ADR-0001](docs/adr/0001-fake-providers.md)) so the whole thing runs offline and
 reproducibly.
 
+![demo: the ten eval scenarios and the 50/50 reliability result](docs/demo.gif)
+
 ---
 
 ## Architecture
