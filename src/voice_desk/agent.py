@@ -89,9 +89,9 @@ def _build_tts(settings: Settings):
 
 
 def _build_llm(settings: Settings):
-    from livekit.plugins import openai
+    from voice_desk.llm import build_agent_llm
 
-    return openai.LLM(model=settings.llm_model)
+    return build_agent_llm(settings.llm_model)
 
 
 def _turn_handling(settings: Settings) -> TurnHandlingOptions:
@@ -116,6 +116,8 @@ def build_session(
     settings: Settings, userdata: DeskContext, *, vad=None
 ) -> AgentSession[DeskContext]:
     """Assemble an AgentSession from the selected stack."""
+    from voice_desk.llm import MAX_TOOL_STEPS
+
     return AgentSession[DeskContext](
         stt=_build_stt(settings),
         llm=_build_llm(settings),
@@ -123,6 +125,7 @@ def build_session(
         vad=vad or silero.VAD.load(),
         turn_handling=_turn_handling(settings),
         userdata=userdata,
+        max_tool_steps=MAX_TOOL_STEPS,
     )
 
 

@@ -134,31 +134,21 @@ class FrontDeskAgent(Agent):
         try:
             contact = await data.contacts.lookup(phone)
         except ProviderError:
-            return (
-                "The customer records are unavailable right now. Proceed as if this is a "
-                "new caller and collect their details normally."
-            )
+            return "Customer records are unavailable; no caller record could be loaded."
         if contact is None:
-            return (
-                "No existing record for that number. Treat this as a new caller: "
-                "ask for their name and confirm the phone number by reading it back."
-            )
+            return "No customer record exists for that phone number (new caller)."
         data.caller = contact
         note = f" Note: {contact.notes}." if contact.notes else ""
-        return (
-            f"Returning customer found: {contact.name}.{note} "
-            f"Greet them warmly by name and continue."
-        )
+        return f"Returning customer: {contact.name}.{note}"
 
     # -- availability -------------------------------------------------------
     @function_tool
     async def check_availability(
         self, ctx: RunContext[DeskContext], day_preference: str, time_window: str
     ) -> str:
-        """Find open appointment times matching the caller's preference.
-
-        Say a brief filler ("Let me check the calendar") before calling this.
-        Only the slots this returns may be booked.
+        """Find open appointment times matching the caller's preference. Only
+        the slots this returns may be booked; their slot_ids are needed for
+        book_appointment.
 
         Args:
             day_preference: The caller's day, e.g. "tomorrow", "next Tuesday",
@@ -173,10 +163,7 @@ class FrontDeskAgent(Agent):
                 day_preference=day_preference, time_window=time_window, limit=3
             )
         except ProviderError:
-            return (
-                "The calendar is temporarily unavailable. Apologise briefly and offer to "
-                "take a message so the office can call back with times — use take_message."
-            )
+            return "The calendar is temporarily unavailable; no times could be retrieved."
         finally:
             await _exit_filler(filler)
 
@@ -189,27 +176,15 @@ class FrontDeskAgent(Agent):
             except ProviderError:
                 slots = []
             if not slots:
-                return (
-                    "No open times are available in the next two weeks for that request. "
-                    "Apologise and offer to take a message with take_message so the office "
-                    "can arrange something."
-                )
+                return "No open appointment times are available in the next two weeks."
             data.issue(slots)
-            options = _format_options(slots)
             return (
-                "Nothing matched that exact request, but here are the soonest available "
-                f"alternatives. Offer them by day and time only:\n{options}\n"
-                "Do not read the slot ids aloud. When the caller picks one, call "
-                "book_appointment with its slot_id."
+                "No times matched that exact request. Soonest available instead:\n"
+                f"{_format_options(slots)}"
             )
 
         data.issue(slots)
-        options = _format_options(slots)
-        return (
-            "Available times (offer these to the caller by day and time only, do not read "
-            f"the slot ids aloud):\n{options}\n"
-            "When the caller chooses one, call book_appointment with its slot_id."
-        )
+        return f"Available appointment times:\n{_format_options(slots)}"
 
     # -- booking ------------------------------------------------------------
     @function_tool
@@ -231,31 +206,22 @@ class FrontDeskAgent(Agent):
         """
         data = ctx.userdata
         if slot_id not in data.issued_slots:
-            return (
-                "That slot id was not one of the options offered in this call, so it cannot "
-                "be booked. Call check_availability and choose one of the times it returns "
-                "before booking. Never invent a time."
-            )
+            return "That slot id was not among the times offered in this call; it cannot be booked."
         try:
             booking = await data.calendar.book(slot_id=slot_id, name=name, phone=phone, issue=issue)
         except ProviderError:
-            return (
-                "That time was just taken or the calendar hiccuped. Apologise, call "
-                "check_availability again, and offer fresh options."
-            )
+            return "That time is no longer available; it may have just been taken."
         data.bookings.append(booking)
-        digits = spell_digits(phone)
-        return (
-            f"Booked: {booking.slot.spoken()} for {name}. "
-            f"Confirm it back to the caller as a concrete date and time, read the phone "
-            f"number back digit by digit ({digits}), then call send_confirmation."
-        )
+        return f"Booked: {booking.slot.spoken()} for {name}, phone {spell_digits(phone)}."
 
     @function_tool
     async def reschedule_appointment(
         self, ctx: RunContext[DeskContext], phone: str, new_slot_id: str
     ) -> str:
-        """Move an existing appointment to a different offered slot.
+        """Move an existing appointment to a different time. Use this (not
+        book_appointment) when the caller wants to change the day or time of a
+        booking they already have. Requires a fresh slot_id from
+        check_availability for the new time.
 
         Args:
             phone: The phone number the original appointment was booked under.
@@ -263,26 +229,14 @@ class FrontDeskAgent(Agent):
         """
         data = ctx.userdata
         if new_slot_id not in data.issued_slots:
-            return (
-                "That new slot id was not offered in this call. Call check_availability "
-                "first and pick one of the returned times."
-            )
+            return "That slot id was not among the times offered in this call."
         try:
             booking = await data.calendar.reschedule(phone=phone, new_slot_id=new_slot_id)
         except BookingNotFoundError:
-            return (
-                "No existing appointment is on file for that number. Offer to book a new "
-                "one instead, or take a message."
-            )
+            return "No existing appointment is on file for that phone number."
         except ProviderError:
-            return (
-                "The calendar is temporarily unavailable. Apologise and offer to take a "
-                "message with take_message."
-            )
-        return (
-            f"Rescheduled to {booking.slot.spoken()}. Confirm the new date and time back to "
-            f"the caller, then call send_confirmation."
-        )
+            return "The calendar is temporarily unavailable; the reschedule could not be made."
+        return f"Rescheduled to {booking.slot.spoken()}."
 
     @function_tool
     async def cancel_appointment(self, ctx: RunContext[DeskContext], phone: str) -> str:
@@ -295,19 +249,10 @@ class FrontDeskAgent(Agent):
         try:
             booking = await data.calendar.cancel(phone)
         except BookingNotFoundError:
-            return (
-                "No active appointment is on file for that number. Let the caller know, and "
-                "offer to book one or take a message."
-            )
+            return "No active appointment is on file for that phone number."
         except ProviderError:
-            return (
-                "The calendar is temporarily unavailable. Apologise and offer to take a "
-                "message with take_message."
-            )
-        return (
-            f"Cancelled the appointment that was on {booking.slot.spoken()}. Confirm the "
-            "cancellation to the caller and ask if there's anything else."
-        )
+            return "The calendar is temporarily unavailable; the cancellation could not be made."
+        return f"Cancelled the appointment that was on {booking.slot.spoken()}."
 
     # -- escalation ---------------------------------------------------------
     @function_tool
@@ -333,10 +278,7 @@ class FrontDeskAgent(Agent):
         data = ctx.userdata
         data.messages.append(Message(name=name, phone=phone, body=message, urgent=urgent))
         when = "right away" if urgent else "as soon as possible"
-        return (
-            f"Message saved for {OWNER_NAME}. Tell the caller you'll pass this to "
-            f"{OWNER_NAME} {when} and that he'll call them back on the number you confirmed."
-        )
+        return f"Message saved for {OWNER_NAME}; he will call back {when}."
 
     # -- confirmation -------------------------------------------------------
     @function_tool
@@ -349,19 +291,13 @@ class FrontDeskAgent(Agent):
         data = ctx.userdata
         booking = _latest_booking_for(data, phone)
         if booking is None:
-            return (
-                "There is no booking to confirm yet. Book the appointment first with "
-                "book_appointment."
-            )
+            return "There is no booking on file for that phone number to confirm."
         try:
             path = await data.confirmations.send(booking)
         except ProviderError:
-            return (
-                "The appointment is booked, but the confirmation could not be sent right "
-                "now. Reassure the caller that the booking itself is secure."
-            )
+            return "The booking is secure, but the confirmation message could not be sent."
         data.confirmations_sent.append(path)
-        return "Confirmation sent. Let the caller know it's on its way and wrap up warmly."
+        return "Confirmation sent."
 
 
 def _format_options(slots: list[Slot]) -> str:

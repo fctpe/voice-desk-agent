@@ -46,7 +46,7 @@ async def test_book_rejects_unissued_slot(agent, ctx):
     out = await agent.book_appointment(
         ctx, slot_id="slot-hallucinated", name="Al", phone="+1 555 0199", issue="leak"
     )
-    assert "not one of the options" in out
+    assert "not among the times offered" in out
     assert ctx.userdata.bookings == []
 
 
@@ -64,7 +64,7 @@ async def test_reschedule_requires_issued_new_slot(agent, ctx):
     slot_id = await _first_issued_slot_id(agent, ctx)
     await agent.book_appointment(ctx, slot_id=slot_id, name="Al", phone="+1 555 0199", issue="leak")
     out = await agent.reschedule_appointment(ctx, phone="+1 555 0199", new_slot_id="slot-madeup")
-    assert "not offered" in out
+    assert "not among the times offered" in out
 
 
 async def test_send_confirmation_writes_ics(agent, ctx, tmp_path):
