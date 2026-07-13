@@ -35,6 +35,7 @@ from .providers import (
     Message,
     ProviderError,
     Slot,
+    SlotUnavailableError,
 )
 
 
@@ -209,8 +210,10 @@ class FrontDeskAgent(Agent):
             return "That slot id was not among the times offered in this call; it cannot be booked."
         try:
             booking = await data.calendar.book(slot_id=slot_id, name=name, phone=phone, issue=issue)
-        except ProviderError:
+        except SlotUnavailableError:
             return "That time is no longer available; it may have just been taken."
+        except ProviderError:
+            return "The calendar is temporarily unavailable; the booking could not be completed."
         data.bookings.append(booking)
         return f"Booked: {booking.slot.spoken()} for {name}, phone {spell_digits(phone)}."
 
