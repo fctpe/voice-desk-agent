@@ -29,6 +29,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -136,6 +137,7 @@ async def run_scenario(scenario: Scenario) -> ScenarioResult:
 
     result_obj = ScenarioResult(id=scenario.id, title=scenario.title)
     all_calls: list[str] = []
+    expected_so_far: Counter[str] = Counter()
     last_result: Any = None
 
     try:
@@ -145,16 +147,21 @@ async def run_scenario(scenario: Scenario) -> ScenarioResult:
             calls_this_turn = _tool_names(last_result)
             all_calls.extend(calls_this_turn)
 
-            # Cumulative: a confirming agent may pace a step a turn earlier or
-            # later than the script, so "the tool has been called by this point"
-            # is the meaningful check, not "on this exact turn". all_calls
-            # already includes this turn's calls (extended above).
+            # Cumulative but count-aware: a confirming agent may pace a step a
+            # turn earlier or later than the script, so we check "called at least
+            # as many times as expected by this point", not "on this exact turn".
+            # Counting (not membership) means a scenario expecting the same tool
+            # on two turns still fails if the agent only calls it once.
+            actual = Counter(all_calls)
             for tool in turn.expect_tools:
+                expected_so_far[tool] += 1
+                need = expected_so_far[tool]
+                ok = actual[tool] >= need
                 result_obj.checks.append(
                     Check(
-                        name=f"has called {tool} by this turn",
-                        passed=tool in all_calls,
-                        detail="" if tool in all_calls else f"calls so far: {all_calls}",
+                        name=f"has called {tool} x{need} by this turn",
+                        passed=ok,
+                        detail="" if ok else f"{tool} called {actual[tool]}x, need {need}",
                     )
                 )
 

@@ -8,8 +8,6 @@ resistance to prompt-injection from the caller.
 
 from __future__ import annotations
 
-from datetime import datetime
-
 # --- Business facts (fictional) -------------------------------------------
 AGENT_NAME = "Riley"
 BUSINESS_NAME = "Miller Plumbing & Heating"
@@ -44,29 +42,6 @@ def spell_digits(value: str) -> str:
     """
     words = [_DIGIT_WORDS[ch] for ch in value if ch in _DIGIT_WORDS]
     return ", ".join(words)
-
-
-def spell_name(name: str) -> str:
-    """Render a name as spelled-out letters: ``"Al"`` -> ``"A-L"``.
-
-    Only alphabetic characters are spelled; separators (spaces, hyphens) split
-    words so "Mary Jane" -> "M-A-R-Y J-A-N-E".
-    """
-    parts = []
-    for word in name.split():
-        letters = [ch.upper() for ch in word if ch.isalpha()]
-        if letters:
-            parts.append("-".join(letters))
-    return " ".join(parts)
-
-
-def format_date_spoken(dt: datetime) -> str:
-    """Concrete, unambiguous spoken date: ``"Tuesday, July 15"``.
-
-    The agent uses this to turn a relative request ("next Tuesday") into a
-    concrete date it can confirm with the caller.
-    """
-    return f"{dt:%A, %B} {dt.day}"
 
 
 def build_system_prompt() -> str:

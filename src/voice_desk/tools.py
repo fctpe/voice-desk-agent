@@ -307,14 +307,16 @@ def _format_options(slots: list[Slot]) -> str:
 
 
 def _latest_booking_for(data: DeskContext, phone: str) -> Booking | None:
+    """The caller's most recent active booking, matched strictly by phone.
+
+    No "closest active booking" fallback: confirming a booking the requested
+    number never made would send the wrong appointment and falsely report
+    success — cancel/reschedule match strictly too, and this must match them.
+    """
     from .providers.memory import _digits
 
     key = _digits(phone)
     for booking in reversed(data.bookings):
         if _digits(booking.phone) == key and booking.status != "cancelled":
-            return booking
-    # Fall back to the most recent active booking of the call.
-    for booking in reversed(data.bookings):
-        if booking.status != "cancelled":
             return booking
     return None

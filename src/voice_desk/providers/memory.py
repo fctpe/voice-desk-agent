@@ -50,8 +50,16 @@ _SEED_CONTACTS = [
 
 
 def _digits(phone: str) -> str:
-    """Reduce a phone number to its trailing digits for forgiving matching."""
-    return "".join(ch for ch in phone if ch.isdigit())[-10:]
+    """Normalize a phone number to a stable key for forgiving matching.
+
+    Strips a leading US country code so the same caller matches whether they
+    give "+1 555 0147" or the local "555 0147" — a plain trailing-digits slice
+    fails for sub-10-digit numbers because the country-code "1" is kept.
+    """
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if digits.startswith("1") and len(digits) - 1 in (7, 10):
+        digits = digits[1:]
+    return digits
 
 
 class MemoryContacts:
@@ -103,7 +111,6 @@ class MemoryCalendar:
         self._slots: dict[str, Slot] = {}
         self._booked: set[str] = set()
         self._bookings: dict[str, Booking] = {}  # booking_id -> Booking
-        self._by_phone: dict[str, str] = {}  # phone digits -> booking_id
         self._build_grid()
 
     # -- grid construction --------------------------------------------------
@@ -159,10 +166,6 @@ class MemoryCalendar:
         candidates = [s for s in candidates if _matches_window(s, time_window)]
         return candidates[:limit]
 
-    async def get_slot(self, slot_id: str) -> Slot | None:
-        await self._tick()
-        return self._slots.get(slot_id)
-
     # -- mutation -----------------------------------------------------------
     async def book(self, *, slot_id: str, name: str, phone: str, issue: str) -> Booking:
         await self._tick()
@@ -184,18 +187,18 @@ class MemoryCalendar:
             issue=issue,
         )
         self._bookings[booking.id] = booking
-        self._by_phone[_digits(phone)] = booking.id
         return booking
 
     async def find_booking(self, phone: str) -> Booking | None:
         await self._tick()
-        booking_id = self._by_phone.get(_digits(phone))
-        if booking_id is None:
-            return None
-        booking = self._bookings.get(booking_id)
-        if booking is None or booking.status == "cancelled":
-            return None
-        return booking
+        # Scan for the caller's most recent active booking rather than trusting a
+        # phone->id index, so a second booking under the same number does not
+        # orphan (and permanently block the slot of) the first.
+        key = _digits(phone)
+        for booking in reversed(list(self._bookings.values())):
+            if _digits(booking.phone) == key and booking.status != "cancelled":
+                return booking
+        return None
 
     async def reschedule(self, *, phone: str, new_slot_id: str) -> Booking:
         await self._tick()
