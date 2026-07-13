@@ -3,15 +3,21 @@
 
 Built on LiveKit Agents' native testing API (the differentiator over bolt-on
 audio-simulation SaaS): each scenario drives the *real* agent + tools through
-``AgentSession.run(user_input=...)`` with no audio, then asserts on the captured
-event stream (``result.expect.contains_function_call(...)``) and judges the
-final reply with an LLM (``.judge(llm, intent=...)``). The calendar/contacts are
-the deterministic in-memory fakes, so only the model and the judge need a key.
+``AgentSession.run(user_input=...)`` with no audio. Two kinds of check per
+scenario: (1) which tools the agent actually called (cumulative across the
+turn), asserted against the captured event stream; (2) an LLM judge over the
+whole transcript for task-completion intents. The calendar/contacts are the
+deterministic in-memory fakes, so only the model and the judge need a key.
+
+Because a real LLM agent is not perfectly deterministic, ``--runs N`` runs every
+scenario N times and reports per-scenario reliability — the honest way to state
+a voice agent's pass rate.
 
 Usage:
     python evals/run_evals.py --list      # print scenarios, ZERO LLM calls
     python evals/run_evals.py --smoke     # first 3 scenarios
-    python evals/run_evals.py             # all scenarios
+    python evals/run_evals.py             # all scenarios, one pass
+    python evals/run_evals.py --runs 5    # reliability: 5 passes per scenario
     python evals/run_evals.py --scenario emergency_escalation
 """
 
@@ -357,6 +363,22 @@ def main() -> int:
         print("-" * 40)
         rate = total_pass / total if total else 0.0
         print(f"aggregate: {total_pass}/{total} scenario-runs passed ({rate:.0%})")
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        out = RESULTS_DIR / "reliability.json"
+        out.write_text(
+            json.dumps(
+                {
+                    "runs": args.runs,
+                    "per_scenario": {
+                        sid: {"passed": sum(h), "of": len(h)} for sid, h in history.items()
+                    },
+                    "aggregate_passed": total_pass,
+                    "aggregate_of": total,
+                },
+                indent=2,
+            )
+        )
+        print(f"wrote {out}")
         return 0 if total_pass == total else 1
 
     results = asyncio.run(run_all(scenarios))
