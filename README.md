@@ -25,7 +25,7 @@ reproducibly.
 flowchart LR
     Caller([Caller]) -->|audio| Pipeline
     subgraph Pipeline["LiveKit AgentSession"]
-        STT[STT<br/>Deepgram / OpenAI] --> LLM[LLM<br/>gpt-4o-mini]
+        STT[STT<br/>Deepgram / OpenAI] --> LLM[LLM<br/>gpt-4.1]
         LLM --> TTS[TTS<br/>Cartesia / OpenAI]
         VAD[Silero VAD<br/>turn-taking] -.-> LLM
     end
@@ -114,18 +114,47 @@ prompt and enforced by the tools + evals:
 Ten multi-turn scenarios drive the **real** agent and tools over text using
 LiveKit's native testing API (`AgentSession.run` + `result.expect...` +
 LLM-`judge`), with the deterministic fakes underneath
-([ADR-0003](docs/adr/0003-native-text-evals.md)). Each scenario asserts the
-expected tool calls and judges the final reply's intent with `gpt-4o-mini`.
+([ADR-0003](docs/adr/0003-native-text-evals.md)). Each scenario asserts the tool
+calls the agent actually made and runs an LLM judge over the whole transcript
+for task completion (`gpt-4o-mini` judge, decoupled from the agent model).
 
 ```bash
 uv run python evals/run_evals.py --list    # the 10 scenarios, zero LLM calls
 uv run python evals/run_evals.py --smoke   # first 3 (needs OPENAI_API_KEY)
 uv run python evals/run_evals.py           # full run -> evals/results/evals.json
+uv run python evals/run_evals.py --runs 5  # reliability: 5 passes per scenario
 ```
 
 Scenarios: happy booking · relative-date ("next Tuesday") · no-slot + alternative
 · caller changes mind · reschedule · cancel · unknown caller (capture + read-back)
 · off-topic/abuse deflection · prompt-injection attempt · emergency escalation.
+
+### Results (live, `gpt-4.1`, committed under [`evals/results/`](evals/results))
+
+**50 / 50 scenario-runs — 5 full passes of all 10 scenarios, 100 %.** A real LLM
+agent is not perfectly deterministic, so the harness reports reliability over
+repeated runs (`--runs N`) rather than a single lucky pass.
+
+Getting there was eval-driven, and every fix is in the git history:
+
+1. **The agent hallucinated bookings.** `gpt-4o-mini` narrated "we have 9 AM
+   available" and "you're all booked" *without ever calling the tools*. Switched
+   to `gpt-4.1` with sequential tool calls — the config LiveKit's own frontdesk
+   example uses — which is the documented 2026 choice for multi-step voice
+   tool-calling. This is exactly the failure the slot-id anti-hallucination guard
+   and this harness exist to catch.
+2. **A booking turn hit a hidden cap.** `identify → check → book → confirm` is
+   four tool steps in one turn, but `AgentSession.max_tool_steps` defaults to 3,
+   silently truncating the chain and dropping the booking. Raised to 8.
+3. **Tool outputs caused re-call loops.** Return values that embedded
+   instructions ("now call book_appointment…") were read as directives to
+   re-call. Rewrote every tool to return plain facts; behavioural rules live in
+   the system prompt.
+4. **Over-confirmation blocked bookings.** The agent kept adding "let me confirm
+   the spelling" turns after the caller already said "book it". Made booking
+   decisive once consent + details are present.
+5. **Transient API timeouts** are absorbed by a 60 s timeout + 5 retries so a
+   network hiccup never counts as an agent failure.
 
 <!-- EVAL_RESULTS -->
 
@@ -144,11 +173,26 @@ EOU -> first audio  =  end_of_utterance_delay + LLM TTFT + TTS TTFB
 
 Each stage comes from LiveKit's `metrics_collected` events, correlated per turn
 by `speech_id`. At the end of a call Riley prints a p50/p95 line and writes a
-JSON report to the metrics directory (`metrics.py`). Using the `full` stack
-(Deepgram + Cartesia streaming) generally lands closer to the target than the
-OpenAI-only stack.
+JSON report to the metrics directory (`metrics.py`).
 
-<!-- LATENCY_RESULTS -->
+### Measured
+
+The **LLM** stage — the largest and the one under our control — measured over 12
+representative turns:
+
+| model | TTFT p50 | TTFT p95 |
+|---|---|---|
+| `gpt-4.1` | ~740 ms | ~1.8 s |
+
+That is the honest tradeoff behind the model choice: `gpt-4.1` is the reliable
+tool-caller (100 % above) but not the fastest. Added to a streaming STT
+(~150 ms) and Cartesia Sonic TTS (~90 ms TTFB), the end-to-end EOU→first-audio
+budget lands around **~1 s p50** — a touch above the 500–800 ms ideal.
+`gpt-4.1-mini` roughly halves the LLM stage for latency-sensitive deployments,
+at some cost to multi-tool reliability (set `LLM_MODEL=gpt-4.1-mini`). The full
+EOU→first-audio number is captured live per call by `metrics.py`; the LLM figure
+here is measured, the STT/TTS figures are the providers' published streaming
+TTFBs.
 
 ---
 
