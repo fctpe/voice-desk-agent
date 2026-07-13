@@ -43,7 +43,14 @@ class Settings:
     stack: Stack = "openai"
 
     # Voice pipeline models (overridable independently of the stack preset).
-    llm_model: str = "gpt-4o-mini"
+    # gpt-4.1, not -mini: evals showed mini narrates fake availability and
+    # "booked" confirmations without calling the tools. gpt-4.1 with
+    # sequential tool calls (see voice_desk.llm) matches LiveKit's own
+    # frontdesk example and books reliably. See docs/adr/0005.
+    llm_model: str = "gpt-4.1"
+    # Judge for the eval harness, decoupled from the agent model so scores stay
+    # comparable when the agent model changes.
+    judge_model: str = "gpt-4o-mini"
     stt_model: str = ""
     stt_language: str = "en"
     tts_model: str = ""
@@ -89,7 +96,8 @@ class Settings:
 
         return cls(
             stack=stack,
-            llm_model=_clean(os.getenv("LLM_MODEL")) or "gpt-4o-mini",
+            llm_model=_clean(os.getenv("LLM_MODEL")) or "gpt-4.1",
+            judge_model=_clean(os.getenv("JUDGE_MODEL")) or "gpt-4o-mini",
             stt_model=_clean(os.getenv("STT_MODEL")),
             stt_language=_clean(os.getenv("STT_LANGUAGE")) or "en",
             tts_model=_clean(os.getenv("TTS_MODEL")),

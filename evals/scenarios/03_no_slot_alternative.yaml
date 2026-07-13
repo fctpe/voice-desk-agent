@@ -10,9 +10,10 @@ forbid_tools:
   - book_appointment
 turns:
   - user: "Do you have anything this Sunday for a radiator that won't heat up?"
+  - user: "Ah okay. What's the soonest you could do instead?"
     expect_tools:
       - check_availability
-  - user: "Ah okay. What's the soonest you could do instead?"
 final_judge: >
   The assistant makes clear there is no Sunday availability (the business is
-  closed then) and offers one or more concrete alternative times on other days.
+  closed on Sundays) and offers one or more concrete alternative appointment
+  times on other days.
