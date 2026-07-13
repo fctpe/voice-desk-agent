@@ -28,7 +28,11 @@ htmlcov/
 outbox/
 transcripts/
 metrics/
-evals/results/
+# Committed eval results back the README's numbers; ignore only stray artifacts.
+evals/results/*
+!evals/results/reliability.json
+!evals/results/evals.json
+!evals/results/.gitkeep
 
 # Editors / OS
 .idea/
