@@ -94,10 +94,15 @@ class CallMetrics:
             turn.transcription_delay_ms = _ms(getattr(metric, "transcription_delay", None))
         elif isinstance(metric, lk_metrics.LLMMetrics):
             turn = self._turn(getattr(metric, "speech_id", None))
-            turn.llm_ttft_ms = _ms(getattr(metric, "ttft", None))
+            # A tool-calling turn fires several LLMMetrics; the caller waits on
+            # the FIRST token, so keep the first TTFT, not the last step's.
+            if turn.llm_ttft_ms is None:
+                turn.llm_ttft_ms = _ms(getattr(metric, "ttft", None))
         elif isinstance(metric, lk_metrics.TTSMetrics):
             turn = self._turn(getattr(metric, "speech_id", None))
-            turn.tts_ttfb_ms = _ms(getattr(metric, "ttfb", None))
+            # Likewise keep the first spoken audio's TTFB.
+            if turn.tts_ttfb_ms is None:
+                turn.tts_ttfb_ms = _ms(getattr(metric, "ttfb", None))
         # STT/VAD metrics are captured implicitly via EOU; ignored here to keep
         # the report focused on the response-latency budget.
 

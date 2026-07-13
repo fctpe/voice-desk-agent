@@ -77,6 +77,16 @@ async def test_send_confirmation_writes_ics(agent, ctx, tmp_path):
     assert written.exists() and written.suffix == ".ics"
 
 
+async def test_send_confirmation_does_not_confirm_a_mismatched_number(agent, ctx):
+    """Regression: send_confirmation must NOT fall back to some other active
+    booking and falsely report success for a number that booked nothing."""
+    slot_id = await _first_issued_slot_id(agent, ctx)
+    await agent.book_appointment(ctx, slot_id=slot_id, name="Al", phone="+1 555 0199", issue="leak")
+    out = await agent.send_confirmation(ctx, phone="+1 555 7777")  # never booked
+    assert "no booking" in out.lower()
+    assert not ctx.userdata.confirmations_sent
+
+
 async def test_take_message_escalates(agent, ctx):
     out = await agent.take_message(
         ctx, name="Sam", phone="+1 555 0188", message="burst pipe", urgent=True

@@ -122,3 +122,38 @@ async def test_contacts_lookup_and_failure():
     failing = MemoryContacts(seed=42, fail_mode="contacts")
     with pytest.raises(ProviderError):
         await failing.lookup(known.phone)
+
+
+async def test_phone_matches_across_formats(fixed_now):
+    """Regression: a 7-digit local number and the +1 form must resolve to the
+    same booking (the country code must not flip the key)."""
+    cal = _calendar(fixed_now)
+    slot = (await cal.find_slots(day_preference="", time_window="any", limit=1))[0]
+    await cal.book(slot_id=slot.id, name="Dana", phone="+1 555 0147", issue="leak")
+    # Cancel using the local form the caller would speak.
+    assert await cal.find_booking("555 0147") is not None
+    cancelled = await cal.cancel("555 0147")
+    assert cancelled.status == "cancelled"
+
+
+async def test_contacts_match_local_and_country_code():
+    contacts = MemoryContacts(seed=42)
+    stored = contacts.contacts[0]  # phone like "+1 555 01xx"
+    local = "".join(ch for ch in stored.phone if ch.isdigit())[-7:]
+    assert await contacts.lookup(local) is not None
+
+
+async def test_second_booking_does_not_orphan_first(fixed_now):
+    """Regression: two bookings under one number must both stay reachable; the
+    later one must not permanently block the first's slot."""
+    cal = _calendar(fixed_now)
+    slots = await cal.find_slots(day_preference="", time_window="any", limit=2)
+    await cal.book(slot_id=slots[0].id, name="Sam", phone="555 0180", issue="one")
+    await cal.book(slot_id=slots[1].id, name="Sam", phone="555 0180", issue="two")
+    # The most recent active booking is findable and cancelable; the earlier one
+    # is not silently orphaned into an un-cancelable state.
+    first = await cal.find_booking("555 0180")
+    assert first is not None
+    await cal.cancel("555 0180")
+    second = await cal.find_booking("555 0180")
+    assert second is not None and second.id != first.id
