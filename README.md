@@ -296,6 +296,10 @@ make check     # ruff check + ruff format --check + pytest (all offline)
 The unit suite runs fully offline; an autouse fixture fails any test that opens
 a network socket.
 
+Security posture (caller-identity binding and its off-trunk weakness, the
+slot-id guard, what the transcripts and outbox hold) is in
+[SECURITY.md](SECURITY.md).
+
 ## A note on AI usage
 
 AI-assisted scaffolding was used to accelerate the boilerplate. The
