@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +107,10 @@ class ScenarioResult:
     title: str
     checks: list[Check] = field(default_factory=list)
     error: str | None = None
+    # LLM time-to-first-token per agent turn, straight from LiveKit's
+    # `metrics_collected` stream. Text mode wires no STT/TTS, so this is the
+    # only stage of the response budget the eval run can honestly measure.
+    llm_ttft_ms: list[float] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
@@ -122,6 +129,7 @@ async def run_scenario(scenario: Scenario) -> ScenarioResult:
 
     from voice_desk.config import Settings
     from voice_desk.llm import MAX_TOOL_STEPS, build_agent_llm
+    from voice_desk.metrics import CallMetrics
     from voice_desk.tools import DeskContext, FrontDeskAgent, build_desk_context
 
     settings = Settings.from_env()
@@ -134,6 +142,11 @@ async def run_scenario(scenario: Scenario) -> ScenarioResult:
         userdata=userdata,
         max_tool_steps=MAX_TOOL_STEPS,
     )
+
+    # Same collector the live agent uses, so eval latency and call latency are
+    # measured by one code path. write=False: per-scenario files would be noise.
+    call_metrics = CallMetrics(call_id=scenario.id)
+    call_metrics.attach(session)
 
     result_obj = ScenarioResult(id=scenario.id, title=scenario.title)
     all_calls: list[str] = []
@@ -196,6 +209,10 @@ async def run_scenario(scenario: Scenario) -> ScenarioResult:
     except Exception as exc:  # noqa: BLE001 - surface any harness/runtime error as a failure
         result_obj.error = f"{type(exc).__name__}: {exc}"
     finally:
+        report = call_metrics.finalize(write=False, echo=False)
+        result_obj.llm_ttft_ms = [
+            turn["llm_ttft_ms"] for turn in report["turns"] if turn["llm_ttft_ms"] is not None
+        ]
         try:
             await session.aclose()
         except Exception:  # pragma: no cover - teardown best-effort
@@ -262,18 +279,26 @@ async def run_all(scenarios: list[Scenario]) -> list[ScenarioResult]:
     return results
 
 
-async def run_reliability(scenarios: list[Scenario], runs: int) -> dict[str, list[bool]]:
+async def run_reliability(
+    scenarios: list[Scenario], runs: int
+) -> tuple[dict[str, list[bool]], list[ScenarioResult]]:
     """Run every scenario `runs` times; return per-scenario pass/fail history so
     the reliability of a non-deterministic LLM agent can be measured, not
-    assumed. This is the honest way to report a voice agent's pass rate."""
+    assumed. This is the honest way to report a voice agent's pass rate.
+
+    Also returns every result, because a reliability sweep is by far the largest
+    honest latency sample the harness ever collects.
+    """
     history: dict[str, list[bool]] = {s.id: [] for s in scenarios}
+    every: list[ScenarioResult] = []
     for run in range(1, runs + 1):
         print(f"— run {run}/{runs} —", flush=True)
         for scenario in scenarios:
             result = await run_scenario(scenario)
             history[scenario.id].append(result.passed)
+            every.append(result)
             print(f"  {scenario.id:<24} {'pass' if result.passed else 'FAIL'}", flush=True)
-    return history
+    return history, every
 
 
 def _print_table(results: list[ScenarioResult]) -> None:
@@ -297,12 +322,67 @@ def _print_table(results: list[ScenarioResult]) -> None:
     print("=" * (width + 40))
 
 
-def _write_json(results: list[ScenarioResult]) -> Path:
+def _git_sha() -> str | None:
+    """Short SHA of the tree that produced these numbers, so a committed result
+    can always be traced back to the code that made it."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - no git present
+        return None
+    return out.stdout.strip() or None
+
+
+def _provenance() -> dict[str, Any]:
+    from voice_desk.config import Settings
+    from voice_desk.llm import MAX_TOOL_STEPS
+    from voice_desk.prompts import SYSTEM_PROMPT
+
+    settings = Settings.from_env()
+    return {
+        "generated_at": time.time(),
+        "generated_at_iso": datetime.now(UTC).isoformat(timespec="seconds"),
+        "git_sha": _git_sha(),
+        "model": settings.llm_model,
+        "judge_model": settings.judge_model,
+        "max_tool_steps": MAX_TOOL_STEPS,
+        # The prompt is the single biggest lever on these numbers; hash it so a
+        # silent prompt edit can never masquerade as the same measurement.
+        "prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:16],
+    }
+
+
+def _latency_block(results: list[ScenarioResult]) -> dict[str, Any]:
+    """LLM TTFT across every agent turn in this run.
+
+    Text mode wires no STT/TTS, so this covers the LLM stage only — the largest
+    stage of the response budget and the one the model choice controls.
+    """
+    from voice_desk.metrics import percentile
+
+    samples = [ms for r in results for ms in r.llm_ttft_ms]
+    return {
+        "stage": "llm_ttft_ms",
+        "note": "LLM stage only; text-mode evals wire no STT/TTS.",
+        "turns_measured": len(samples),
+        "p50": percentile(samples, 50),
+        "p95": percentile(samples, 95),
+    }
+
+
+def _write_json(results: list[ScenarioResult], *, partial: bool) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
-        "generated_at": time.time(),
+        **_provenance(),
         "passed": sum(1 for r in results if r.passed),
         "total": len(results),
+        "latency": _latency_block(results),
         "scenarios": [
             {
                 "id": r.id,
@@ -316,7 +396,11 @@ def _write_json(results: list[ScenarioResult]) -> Path:
             for r in results
         ],
     }
-    path = RESULTS_DIR / "evals.json"
+    # A subset run must never overwrite the committed full-run artifact. CI runs
+    # --smoke; without this, three green scenarios would replace the ten-scenario
+    # result the README cites, and nothing would flag it.
+    path = RESULTS_DIR / ("evals.partial.json" if partial else "evals.json")
+    payload["partial"] = partial
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
 
@@ -360,7 +444,7 @@ def main() -> int:
         return 1
 
     if args.runs > 1:
-        history = asyncio.run(run_reliability(scenarios, args.runs))
+        history, every_result = asyncio.run(run_reliability(scenarios, args.runs))
         total_pass = sum(sum(h) for h in history.values())
         total = sum(len(h) for h in history.values())
         print(f"\n{'SCENARIO':<24} RELIABILITY")
@@ -375,7 +459,9 @@ def main() -> int:
         out.write_text(
             json.dumps(
                 {
+                    **_provenance(),
                     "runs": args.runs,
+                    "latency": _latency_block(every_result),
                     "per_scenario": {
                         sid: {"passed": sum(h), "of": len(h)} for sid, h in history.items()
                     },
@@ -390,7 +476,7 @@ def main() -> int:
 
     results = asyncio.run(run_all(scenarios))
     _print_table(results)
-    path = _write_json(results)
+    path = _write_json(results, partial=bool(args.smoke or args.scenario))
     print(f"wrote {path}")
     return 0 if all(r.passed for r in results) else 1
 

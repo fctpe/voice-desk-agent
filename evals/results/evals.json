@@ -1,7 +1,20 @@
 {
-  "generated_at": 1783942925.5878751,
+  "generated_at": 1785751427.553683,
+  "generated_at_iso": "2026-08-03T10:03:47+00:00",
+  "git_sha": "7091520",
+  "model": "gpt-4.1",
+  "judge_model": "gpt-4o-mini",
+  "max_tool_steps": 8,
+  "prompt_sha256": "25626d2cf31681b9",
   "passed": 10,
   "total": 10,
+  "latency": {
+    "stage": "llm_ttft_ms",
+    "note": "LLM stage only; text-mode evals wire no STT/TTS.",
+    "turns_measured": 25,
+    "p50": 799.2,
+    "p95": 1781.6
+  },
   "scenarios": [
     {
       "id": "happy_booking",
@@ -278,5 +291,6 @@
         }
       ]
     }
-  ]
+  ],
+  "partial": false
 }
