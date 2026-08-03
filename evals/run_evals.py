@@ -107,9 +107,9 @@ class ScenarioResult:
     title: str
     checks: list[Check] = field(default_factory=list)
     error: str | None = None
-    # LLM time-to-first-token per agent turn, straight from LiveKit's
-    # `metrics_collected` stream. Text mode wires no STT/TTS, so this is the
-    # only stage of the response budget the eval run can honestly measure.
+    # LLM time-to-first-token per agent turn, from `ChatMessage.metrics` on each
+    # assistant message. Text mode wires no STT/TTS, so this is the only stage of
+    # the response budget the eval run can honestly measure.
     llm_ttft_ms: list[float] = field(default_factory=list)
 
     @property
@@ -369,7 +369,13 @@ def _latency_block(results: list[ScenarioResult]) -> dict[str, Any]:
     samples = [ms for r in results for ms in r.llm_ttft_ms]
     return {
         "stage": "llm_ttft_ms",
-        "note": "LLM stage only; text-mode evals wire no STT/TTS.",
+        # Stated in full because the definition changed with the move off
+        # `metrics_collected` (ADR-0007): a tool-calling turn makes several model
+        # calls, and this is the one that produced the reply text, not the first.
+        "note": (
+            "TTFT of the model call that produced the turn's reply text; "
+            "LLM stage only, text-mode evals wire no STT/TTS."
+        ),
         "turns_measured": len(samples),
         "p50": percentile(samples, 50),
         "p95": percentile(samples, 95),
@@ -455,11 +461,17 @@ def main() -> int:
         rate = total_pass / total if total else 0.0
         print(f"aggregate: {total_pass}/{total} scenario-runs passed ({rate:.0%})")
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        out = RESULTS_DIR / "reliability.json"
+        # Same rule as the single-pass path: a subset sweep must not overwrite
+        # the committed artifact the README cites. --scenario X --runs 5 is the
+        # normal way to chase one flaky scenario, and it used to clobber the
+        # whole-suite result with a one-scenario number.
+        partial = bool(args.smoke or args.scenario)
+        out = RESULTS_DIR / ("reliability.partial.json" if partial else "reliability.json")
         out.write_text(
             json.dumps(
                 {
                     **_provenance(),
+                    "partial": partial,
                     "runs": args.runs,
                     "latency": _latency_block(every_result),
                     "per_scenario": {

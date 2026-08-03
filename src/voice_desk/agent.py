@@ -13,6 +13,7 @@ import asyncio
 import logging
 import time
 
+from livekit import rtc
 from livekit.agents import (
     AgentSession,
     AutoSubscribe,
@@ -27,6 +28,7 @@ from .config import Settings
 from .metrics import CallMetrics
 from .prompts import GREETING
 from .tools import DeskContext, FrontDeskAgent, build_desk_context
+from .tracing import flush_tracing, setup_tracing
 from .transcript import CallTranscript
 
 logger = logging.getLogger("voice_desk")
@@ -52,6 +54,54 @@ _FAREWELLS = (
 def _is_farewell(text: str) -> bool:
     lowered = text.strip().lower()
     return any(phrase in lowered for phrase in _FAREWELLS)
+
+
+# LiveKit SIP publishes the calling number on the SIP participant under this
+# attribute (docs/telephony.md). It is the caller's line, not their claim about
+# it, which is why it — and not identify_caller — is the real identity.
+_CALLER_ID_ATTRIBUTE = "sip.phoneNumber"
+
+# How long to wait for the SIP participant. It has normally joined before the
+# agent is dispatched, but the room's participant list syncs asynchronously, so
+# there is a window right after ctx.connect() in which it is not there yet.
+_SIP_PARTICIPANT_TIMEOUT = 5.0
+
+
+async def _caller_id(ctx: JobContext, *, expect_trunk: bool) -> str | None:
+    """The calling number from SIP caller-ID, or None if there is none to be had.
+
+    Three different things produce None and each is logged as itself: no trunk is
+    configured (the console demo), a trunk is configured but no SIP participant
+    joined, and a SIP participant that withholds caller-ID. Only the first is
+    routine — the other two mean the call is on a trunk whose identity never
+    arrived, and it stays unidentified rather than falling back to the caller's
+    own word for who they are.
+    """
+    if not expect_trunk:
+        logger.info("SIP_TRUNK is off; no caller-ID exists, identity will be caller-stated")
+        return None
+    try:
+        participant = await asyncio.wait_for(
+            ctx.wait_for_participant(kind=[rtc.ParticipantKind.PARTICIPANT_KIND_SIP]),
+            timeout=_SIP_PARTICIPANT_TIMEOUT,
+        )
+    except TimeoutError:
+        logger.error(
+            "SIP_TRUNK is on but no SIP participant joined within %.0fs; "
+            "the call stays unidentified and can change no appointment",
+            _SIP_PARTICIPANT_TIMEOUT,
+        )
+        return None
+    number = participant.attributes.get(_CALLER_ID_ATTRIBUTE, "")
+    if not number:
+        logger.error(
+            "SIP participant %s carries no %s; "
+            "the call stays unidentified and can change no appointment",
+            participant.identity,
+            _CALLER_ID_ATTRIBUTE,
+        )
+        return None
+    return number
 
 
 # -- pipeline assembly ------------------------------------------------------
@@ -138,6 +188,7 @@ async def entrypoint(ctx: JobContext) -> None:
     """Handle a single inbound call."""
     settings = Settings.from_env()
     userdata = build_desk_context(settings)
+    setup_tracing()
 
     room_name = ctx.room.name if ctx.room else "call"
     call_id = f"{room_name}-{int(time.time())}".replace(" ", "_")
@@ -178,9 +229,17 @@ async def entrypoint(ctx: JobContext) -> None:
     async def _finalize(_reason: str = "") -> None:
         call_metrics.finalize()
         transcript.finalize()
+        flush_tracing()
 
     ctx.add_shutdown_callback(_finalize)
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
+    # Bind the call's identity before the first turn, and decide whether the
+    # caller may supply it themselves: off-trunk that is the only identity there
+    # is, on a trunk it is the thing caller-ID exists to replace (ADR-0006).
+    userdata.authenticated_phone = await _caller_id(ctx, expect_trunk=settings.sip_trunk)
+    userdata.allow_caller_stated_identity = not settings.sip_trunk
+
     await session.start(agent=FrontDeskAgent(), room=ctx.room)
     await session.say(GREETING, allow_interruptions=True)

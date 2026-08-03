@@ -21,7 +21,7 @@ invented, and the calendar is a deterministic in-memory fake **by design** (see
 [ADR-0001](docs/adr/0001-fake-providers.md)) so the whole thing runs offline and
 reproducibly.
 
-![demo: the ten eval scenarios and the 50/50 reliability result](docs/demo.gif)
+![demo: the eval scenarios and the reliability result](docs/demo.gif)
 
 ---
 
@@ -41,7 +41,7 @@ flowchart LR
         Con[(Contacts<br/>fake, seeded)]
         Ics[.ics outbox]
     end
-    Pipeline --> Metrics[Per-turn latency<br/>+ JSONL transcript]
+    Pipeline --> Metrics[Per-turn latency + tokens<br/>+ JSONL transcript]
 ```
 
 The pipeline is **provider-agnostic** and chosen from the environment. Two
@@ -87,10 +87,10 @@ the primary guard against a model inventing a time.
 | `identify_caller(phone)` | Look up a returning customer by number to greet them by name. |
 | `check_availability(day_preference, time_window)` | Find real open slots and **issue** their ids for this call. |
 | `book_appointment(slot_id, name, phone, issue)` | Book an **issued** slot; rejects unknown/invented ids. |
-| `reschedule_appointment(phone, new_slot_id)` | Move an existing booking to another issued slot. |
-| `cancel_appointment(phone)` | Cancel the caller's appointment. |
+| `reschedule_appointment(phone, new_slot_id)` | Move an existing booking to another issued slot — the caller's own number only. |
+| `cancel_appointment(phone)` | Cancel the caller's appointment — their own number only. |
 | `take_message(name, phone, message, urgent)` | Human escalation — "I'll pass this to Mr. Miller right away." |
-| `send_confirmation(phone)` | Write an `.ics` confirmation to the outbox. |
+| `send_confirmation(phone)` | Write an `.ics` confirmation to the outbox for a booking made in this call. |
 
 ---
 
@@ -101,6 +101,12 @@ prompt and enforced by the tools + evals:
 
 - **No invented slots.** `check_availability` mints server-side slot ids;
   booking refuses anything it did not hand out this call.
+- **An appointment belongs to its caller.** The call is bound to one number —
+  SIP caller-ID on a real trunk, otherwise the first number the caller gives to
+  `identify_caller` — and cancel/reschedule refuse any other number, spoken as a
+  plain "I can only do that for your own number". Booking never sets that
+  identity, so no caller can grant themselves one by booking under a number they
+  do not own ([ADR-0006](docs/adr/0006-caller-identity-binding.md)).
 - **Read-backs.** Phone numbers are read back digit by digit; uncertain names
   are spelled letter by letter; bookings are confirmed as a concrete date/time.
 - **Relative dates are made concrete.** "next Tuesday" is confirmed as an actual
@@ -117,7 +123,7 @@ prompt and enforced by the tools + evals:
 
 ## Evals
 
-Ten multi-turn scenarios drive the **real** agent and tools over text using
+Twelve multi-turn scenarios drive the **real** agent and tools over text using
 LiveKit's native testing API (`AgentSession.run` + `result.expect...` +
 LLM-`judge`), with the deterministic fakes underneath
 ([ADR-0003](docs/adr/0003-native-text-evals.md)). Each scenario asserts the tool
@@ -125,7 +131,7 @@ calls the agent actually made and runs an LLM judge over the whole transcript
 for task completion (`gpt-4o-mini` judge, decoupled from the agent model).
 
 ```bash
-uv run python evals/run_evals.py --list    # the 10 scenarios, zero LLM calls
+uv run python evals/run_evals.py --list    # the 12 scenarios, zero LLM calls
 uv run python evals/run_evals.py --smoke   # first 3 (needs OPENAI_API_KEY)
 uv run python evals/run_evals.py           # full run -> evals/results/evals.json
 uv run python evals/run_evals.py --runs 5  # reliability: 5 passes per scenario
@@ -133,13 +139,25 @@ uv run python evals/run_evals.py --runs 5  # reliability: 5 passes per scenario
 
 Scenarios: happy booking · relative-date ("next Tuesday") · no-slot + alternative
 · caller changes mind · reschedule · cancel · unknown caller (capture + read-back)
-· off-topic/abuse deflection · prompt-injection attempt · emergency escalation.
+· off-topic/abuse deflection · prompt-injection attempt · emergency escalation ·
+cross-caller cancellation attempt · cross-caller reschedule attempt.
 
 ### Results (live, `gpt-4.1`, committed under [`evals/results/`](evals/results))
 
-**50 / 50 scenario-runs — 5 full passes of all 10 scenarios, 100 %.** A real LLM
+**60 / 60 scenario-runs — 5 full passes of all 12 scenarios, 100 %.** A real LLM
 agent is not perfectly deterministic, so the harness reports reliability over
 repeated runs (`--runs N`) rather than a single lucky pass.
+
+Getting to that number took three sweeps, and the two it rejected are the
+argument for running the suite five times instead of once. Adding the
+[ADR-0006](docs/adr/0006-caller-identity-binding.md) identity rule dropped
+`happy_booking` to 3/5: told to call `identify_caller` first when *changing* an
+appointment, the model generalised it to new bookings and spent a turn asking
+for a number instead of checking availability. Scoping the rule fixed that and
+broke something else — "booking needs no identification first" read as licence
+to skip the read-back, and `unknown_caller` fell to 1/5 for a net 56/60.
+Constraining the rule to *ordering* alone is what holds at 60/60. A single green
+run would have shipped either intermediate state.
 
 Getting there was eval-driven, and every fix is in the git history:
 
@@ -175,9 +193,15 @@ the call feels laggy. Riley measures the budget that governs this:
 EOU -> first audio  =  end_of_utterance_delay + LLM TTFT + TTS TTFB
 ```
 
-Each stage comes from LiveKit's `metrics_collected` events, correlated per turn
-by `speech_id`. At the end of a call Riley prints a p50/p95 line and writes a
-JSON report to the metrics directory (`metrics.py`).
+The stages, and the end-to-end number itself, come from LiveKit's
+`ChatMessage.metrics` — one report per message, with the SDK's own
+`e2e_latency` as the budget (it includes the tool round-trips, which summing the
+three stages does not). Token and audio totals per model come from
+`session_usage_updated`, so the **cost** of a call is in the same report as its
+latency. Both replace the deprecated `metrics_collected`
+([ADR-0007](docs/adr/0007-opentelemetry-genai.md)). At the end of a call Riley
+prints a p50/p95 + tokens line and writes a JSON report to the metrics directory
+(`metrics.py`).
 
 ### Measured
 
@@ -187,11 +211,17 @@ reliability sweep:
 
 | model | TTFT p50 | TTFT p95 | turns |
 |---|---|---|---|
-| `gpt-4.1` | 748 ms | 1199 ms | 125 |
+| `gpt-4.1` | 717 ms | 1341 ms | 160 |
 
 Committed under [`evals/results/reliability.json`](evals/results/reliability.json)
 (`latency` block, stamped with the model, prompt hash and commit that produced
 it). Reproduce with `uv run python evals/run_evals.py --runs 5`.
+
+TTFT here means the model call that produced the turn's reply text, which is the
+one `ChatMessage.metrics` reports
+([ADR-0007](docs/adr/0007-opentelemetry-genai.md)). An earlier revision measured
+*the first* call of a turn; a booking turn makes four tool calls, so the two are
+not the same number and older figures are not comparable.
 
 That is the honest tradeoff behind the model choice: `gpt-4.1` is the reliable
 tool-caller (100 % above) but not the fastest. Added to a streaming STT
@@ -206,6 +236,23 @@ providers' published streaming TTFBs, not measurements. And the full
 EOU→first-audio number is captured per call by `metrics.py` during a real voice
 call, which is not something a committed artifact in this repo can prove.
 
+### Tracing (opt-in)
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP/HTTP collector and each call exports
+a span per agent turn, per model call and per tool call — correlated by
+`lk.speech_id`, with `gen_ai.request.model`, `gen_ai.usage.input_tokens` /
+`output_tokens` and `gen_ai.tool.name` on the spans a GenAI-aware backend reads.
+LiveKit 1.6 emits most of that itself once a provider is installed, so Riley
+installs one and fills the gaps rather than shipping a second span tree over the
+same call.
+
+Leave the variable unset and it is off: no exporter, no tracer provider, so
+LiveKit's spans are non-recording and go nowhere. The OTel SDK and OTLP exporter
+are still imported either way — livekit-agents loads them at module scope, 17
+`opentelemetry.exporter.otlp` modules' worth, measured in
+[ADR-0007](docs/adr/0007-opentelemetry-genai.md). Running the agent never needs a
+collector.
+
 ---
 
 ## Limitations (by design and honest)
@@ -217,6 +264,20 @@ call, which is not something a committed artifact in this repo can prove.
 - **No telephony bundled.** The demo is console-only. Attaching a real phone
   number via LiveKit SIP + Twilio/Telnyx is sketched in
   [docs/telephony.md](docs/telephony.md) but intentionally not wired.
+- **Console identity is self-asserted.** With no trunk there is no caller-ID to
+  bind, so in the console the call's identity is simply the first number the
+  caller says. That stops a caller switching numbers mid-call to reach someone
+  else's appointment, but not one who states the wrong number from the start —
+  only real caller-ID does, and only a real trunk supplies it. Set `SIP_TRUNK=1`
+  on a trunk and self-assertion is off entirely: a call whose caller-ID never
+  arrives can book and leave messages but change nothing
+  ([ADR-0006](docs/adr/0006-caller-identity-binding.md)).
+- **The GenAI trace conventions are not stable yet.** As of July 2026 they are
+  still Development status — the `gen_ai.*` registry ships only under
+  `opentelemetry.semconv._incubating`, and there is no tagged conventions release
+  to pin against. Riley uses the settled model-call attributes and declines to
+  invent the experimental agent ones, so a future rename is a find-and-replace
+  rather than a re-instrumentation ([ADR-0007](docs/adr/0007-opentelemetry-genai.md)).
 - **English-only (v1).** Positioned for a global English audience; multilingual
   is a roadmap item with its own eval suite, not an untested bolt-on
   ([ADR-0004](docs/adr/0004-english-only-v1.md)).
