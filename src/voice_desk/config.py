@@ -26,6 +26,10 @@ def _clean(value: str | None) -> str:
     return (value or "").strip()
 
 
+def _bool(name: str) -> bool:
+    return _clean(os.getenv(name)).lower() in ("1", "true", "yes", "on")
+
+
 def _int(name: str, default: int) -> int:
     raw = _clean(os.getenv(name))
     if not raw:
@@ -65,6 +69,12 @@ class Settings:
     livekit_url: str = ""
     livekit_api_key: str = ""
     livekit_api_secret: str = ""
+
+    # True when this worker answers calls over a SIP trunk (docs/telephony.md).
+    # It decides where the call's identity comes from, so it cannot be inferred:
+    # off, the agent never waits for a SIP participant; on, a call without
+    # caller-ID stays unidentified instead of trusting the caller (ADR-0006).
+    sip_trunk: bool = False
 
     # Runtime output directories.
     outbox_dir: str = "outbox"
@@ -109,6 +119,7 @@ class Settings:
             livekit_url=_clean(os.getenv("LIVEKIT_URL")),
             livekit_api_key=_clean(os.getenv("LIVEKIT_API_KEY")),
             livekit_api_secret=_clean(os.getenv("LIVEKIT_API_SECRET")),
+            sip_trunk=_bool("SIP_TRUNK"),
             outbox_dir=_clean(os.getenv("OUTBOX_DIR")) or "outbox",
             transcript_dir=_clean(os.getenv("TRANSCRIPT_DIR")) or "transcripts",
             metrics_dir=_clean(os.getenv("METRICS_DIR")) or "metrics",

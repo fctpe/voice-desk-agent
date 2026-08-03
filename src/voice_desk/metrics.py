@@ -1,15 +1,23 @@
-"""Per-turn latency capture from LiveKit's ``metrics_collected`` events.
+"""Per-call latency and token capture from LiveKit's session events.
 
-LiveKit emits a metric object per pipeline stage (EOU decision, LLM, TTS, STT).
-We correlate them by ``speech_id`` into one row per agent turn and derive the
-number that actually governs how "instant" the agent feels:
+Two streams, both non-deprecated in livekit-agents 1.6.5:
 
-    EOU -> first audio  =  end_of_utterance_delay + LLM TTFT + TTS TTFB
+* ``conversation_item_added`` carries ``ChatMessage.metrics`` — the stage
+  latencies for that one message. The number that governs how "instant" the
+  agent feels is ``e2e_latency`` on an assistant message: from the moment the
+  caller stopped talking to the first byte of the reply, tool round-trips
+  included. The human-conversation comfort zone is roughly 500-800 ms; much
+  beyond that reads as a laggy call.
+* ``session_usage_updated`` carries the call's token and audio totals per
+  model, which is what makes the cost of a call measurable rather than guessed.
 
-i.e. from the moment the caller stops talking to the first byte of the reply.
-The human-conversation comfort zone is roughly 500-800 ms; anything much beyond
-that reads as a laggy call. At the end of a call we print a p50/p95 summary and
-write a JSON report so the budget is measurable, not vibes.
+Both replace ``metrics_collected``, which 1.6.5 deprecates. The tradeoff is
+recorded in docs/adr/0007: the replacements are per *message* and per *session*,
+so neither exposes ``speech_id``, and per-turn token attribution moved to the
+OTel ``llm_request`` span (see :mod:`voice_desk.tracing`).
+
+At the end of a call we print a p50/p95 line and write a JSON report so the
+budget is measurable, not vibes.
 """
 
 from __future__ import annotations
@@ -20,7 +28,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from livekit.agents import metrics as lk_metrics
+_LATENCY_STAGES = (
+    "eou_delay_ms",
+    "transcription_delay_ms",
+    "llm_ttft_ms",
+    "tts_ttfb_ms",
+    "response_ms",
+)
 
 
 def _ms(seconds: float | None) -> float | None:
@@ -48,92 +62,97 @@ def percentile(values: list[float], pct: float) -> float | None:
 
 
 @dataclass
-class TurnLatency:
-    """One agent turn's stage latencies (milliseconds)."""
+class TurnMetrics:
+    """One chat message's stage latencies (milliseconds), as LiveKit reports them.
 
-    speech_id: str
+    A row is either a user message (endpointing and transcription) or an
+    assistant message (model, speech and the end-to-end budget) — LiveKit fills a
+    disjoint half of ``ChatMessage.metrics`` for each, and pairing them back up
+    ourselves would be a guess. ``response_ms`` is LiveKit's own pairing.
+    """
+
+    item_id: str
+    role: str
     eou_delay_ms: float | None = None
     transcription_delay_ms: float | None = None
     llm_ttft_ms: float | None = None
     tts_ttfb_ms: float | None = None
-
-    @property
-    def response_ms(self) -> float | None:
-        """EOU -> first audio budget for this turn, when the core stages are present."""
-        if self.llm_ttft_ms is None or self.tts_ttfb_ms is None:
-            return None
-        return round((self.eou_delay_ms or 0.0) + self.llm_ttft_ms + self.tts_ttfb_ms, 1)
+    response_ms: float | None = None
+    model: str | None = None
 
 
 class CallMetrics:
-    """Accumulates metric events for a single call and reports at the end."""
+    """Accumulates a single call's metrics and reports at the end."""
 
     def __init__(self, *, call_id: str, metrics_dir: str | Path = "metrics") -> None:
         self.call_id = call_id
         self._dir = Path(metrics_dir)
-        self._turns: dict[str, TurnLatency] = {}
-        self._fallback_seq = 0
+        self._turns: list[TurnMetrics] = []
+        self._usage: list[dict[str, Any]] = []
 
     # -- ingestion ----------------------------------------------------------
     def attach(self, session: Any) -> None:
-        """Subscribe to a live AgentSession's metrics stream."""
+        """Subscribe to a live AgentSession's metrics streams."""
 
-        @session.on("metrics_collected")
-        def _on_metrics(ev: Any) -> None:  # pragma: no cover - exercised in live runs
-            self.record(ev.metrics)
+        @session.on("conversation_item_added")
+        def _on_item(ev: Any) -> None:
+            self.record_item(getattr(ev, "item", None))
 
-    def _turn(self, speech_id: str | None) -> TurnLatency:
-        if not speech_id:
-            self._fallback_seq += 1
-            speech_id = f"turn-{self._fallback_seq}"
-        if speech_id not in self._turns:
-            self._turns[speech_id] = TurnLatency(speech_id=speech_id)
-        return self._turns[speech_id]
+        @session.on("session_usage_updated")
+        def _on_usage(ev: Any) -> None:
+            self.record_usage(ev.usage)
 
-    def record(self, metric: Any) -> None:
-        """Fold a single metric object into the per-turn table."""
-        if isinstance(metric, lk_metrics.EOUMetrics):
-            turn = self._turn(getattr(metric, "speech_id", None))
-            turn.eou_delay_ms = _ms(getattr(metric, "end_of_utterance_delay", None))
-            turn.transcription_delay_ms = _ms(getattr(metric, "transcription_delay", None))
-        elif isinstance(metric, lk_metrics.LLMMetrics):
-            turn = self._turn(getattr(metric, "speech_id", None))
-            # A tool-calling turn fires several LLMMetrics; the caller waits on
-            # the FIRST token, so keep the first TTFT, not the last step's.
-            if turn.llm_ttft_ms is None:
-                turn.llm_ttft_ms = _ms(getattr(metric, "ttft", None))
-        elif isinstance(metric, lk_metrics.TTSMetrics):
-            turn = self._turn(getattr(metric, "speech_id", None))
-            # Likewise keep the first spoken audio's TTFB.
-            if turn.tts_ttfb_ms is None:
-                turn.tts_ttfb_ms = _ms(getattr(metric, "ttfb", None))
-        # STT/VAD metrics are captured implicitly via EOU; ignored here to keep
-        # the report focused on the response-latency budget.
+    def record_item(self, item: Any) -> None:
+        """Fold one conversation item's metrics into the per-message table.
+
+        Items with no metrics — agent handoffs, and the *user* messages of a
+        text-mode turn, which never went through STT — are skipped rather than
+        recorded as a row of ``None`` that would pad the turn count. A text-mode
+        assistant message still carries ``llm_node_ttft``, so it is recorded.
+        """
+        role = getattr(item, "role", None)
+        report = getattr(item, "metrics", None) or {}
+        if role not in ("user", "assistant") or not report:
+            return
+        turn = TurnMetrics(item_id=item.id, role=role)
+        if role == "user":
+            turn.eou_delay_ms = _ms(report.get("end_of_turn_delay"))
+            turn.transcription_delay_ms = _ms(report.get("transcription_delay"))
+        else:
+            turn.llm_ttft_ms = _ms(report.get("llm_node_ttft"))
+            turn.tts_ttfb_ms = _ms(report.get("tts_node_ttfb"))
+            turn.response_ms = _ms(report.get("e2e_latency"))
+            turn.model = (report.get("llm_metadata") or {}).get("model_name")
+        self._turns.append(turn)
+
+    def record_usage(self, usage: Any) -> None:
+        """Take the latest usage snapshot.
+
+        ``AgentSessionUsage`` is a running total for the whole session, not a
+        delta, so the newest snapshot replaces the previous one. Adding them up
+        would multiply the bill by the number of events.
+        """
+        self._usage = [model.model_dump() for model in usage.model_usage]
 
     # -- reporting ----------------------------------------------------------
     def _column(self, attr: str) -> list[float]:
         out = []
-        for turn in self._turns.values():
+        for turn in self._turns:
             value = getattr(turn, attr)
             if value is not None:
                 out.append(value)
         return out
 
     def summary(self) -> dict[str, Any]:
-        responses = [t.response_ms for t in self._turns.values() if t.response_ms is not None]
-        stages = {
-            "eou_delay_ms": self._column("eou_delay_ms"),
-            "transcription_delay_ms": self._column("transcription_delay_ms"),
-            "llm_ttft_ms": self._column("llm_ttft_ms"),
-            "tts_ttfb_ms": self._column("tts_ttfb_ms"),
-            "response_ms": responses,
-        }
         return {
             "call_id": self.call_id,
-            "turns": len(self._turns),
+            "turns": sum(1 for turn in self._turns if turn.role == "assistant"),
             "percentiles": {
-                name: {"p50": percentile(vals, 50), "p95": percentile(vals, 95)}
-                for name, vals in stages.items()
+                stage: {
+                    "p50": percentile(self._column(stage), 50),
+                    "p95": percentile(self._column(stage), 95),
+                }
+                for stage in _LATENCY_STAGES
             },
         }
 
@@ -141,32 +160,41 @@ class CallMetrics:
         return {
             "call_id": self.call_id,
             "generated_at": time.time(),
-            "turns": [asdict(t) | {"response_ms": t.response_ms} for t in self._turns.values()],
+            "turns": [asdict(turn) for turn in self._turns],
+            "usage": self._usage,
             "summary": self.summary(),
         }
 
     def finalize(self, *, write: bool = True, echo: bool = True) -> dict[str, Any]:
-        """Write the JSON report and print a compact p50/p95 line."""
+        """Write the JSON report and print a compact p50/p95 + token line."""
         report = self.as_dict()
         if write:
             self._dir.mkdir(parents=True, exist_ok=True)
             path = self._dir / f"metrics-{self.call_id}.json"
             path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         if echo:
-            self._echo(report["summary"])
+            self._echo(report)
         return report
 
     @staticmethod
-    def _echo(summary: dict[str, Any]) -> None:
+    def _echo(report: dict[str, Any]) -> None:
+        summary = report["summary"]
         pct = summary["percentiles"]
         resp = pct["response_ms"]
+        llm = [row for row in report["usage"] if row.get("type") == "llm_usage"]
 
         def fmt(v: float | None) -> str:
             return f"{v:.0f}ms" if v is not None else "n/a"
+
+        def tokens(field: str) -> str:
+            # No usage event means the count is unknown, not zero — "in=0 out=0"
+            # would read as a free call. Same "n/a" as the latency fields.
+            return str(sum(row[field] for row in llm)) if llm else "n/a"
 
         print(
             f"[METRICS] call={summary['call_id']} turns={summary['turns']} "
             f"EOU->audio p50={fmt(resp['p50'])} p95={fmt(resp['p95'])} | "
             f"LLM TTFT p50={fmt(pct['llm_ttft_ms']['p50'])} "
-            f"TTS TTFB p50={fmt(pct['tts_ttfb_ms']['p50'])}"
+            f"TTS TTFB p50={fmt(pct['tts_ttfb_ms']['p50'])} | "
+            f"LLM tokens in={tokens('input_tokens')} out={tokens('output_tokens')}"
         )

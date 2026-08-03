@@ -12,6 +12,13 @@ dependencies = [
     "livekit-agents[cartesia,deepgram,openai,silero]>=1.6,<1.7",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    # voice_desk.tracing imports these directly. They already arrive as hard
+    # dependencies of livekit-agents 1.6 (its telemetry module imports the SDK
+    # and the OTLP exporter at module scope), so declaring them adds nothing to
+    # install; it just stops a LiveKit repackaging from breaking tracing silently.
+    "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
 ]
 
 [project.scripts]

@@ -40,9 +40,17 @@ Caller ── PSTN ──▶ SIP trunk ──▶ LiveKit SIP ──▶ LiveKit r
 - **Audio tuning.** Phone audio is narrowband and noisier than a laptop mic.
   Silero VAD thresholds (activation, min-silence) are worth tuning for a trunk;
   the console defaults favour a clean microphone.
-- **Caller ID.** The caller's number arrives in the SIP participant attributes,
-  which is a natural input to `identify_caller` — but this repo does not wire a
-  real trunk, so that path is left as an extension point.
+- **Caller ID.** LiveKit SIP publishes the calling number on the SIP participant
+  as the `sip.phoneNumber` attribute. Set `SIP_TRUNK=1` and `entrypoint` waits
+  for that participant at call start (`ctx.wait_for_participant(kind=[…SIP])`,
+  5 s) and binds its caller-ID as the call's identity, which is what lets
+  `cancel`/`reschedule` refuse another caller's appointment. No SIP participant,
+  or one without the attribute, is an **error** in the log and the call stays
+  unidentified rather than degrading to what the caller says
+  ([ADR-0006](adr/0006-caller-identity-binding.md)). No trunk is wired here, so
+  that path is exercised only by unit tests against a stubbed job context; with
+  `SIP_TRUNK` off the console falls back to the weaker, self-asserted identity
+  from `identify_caller`.
 - **Cost / latency.** A real trunk adds network hops; watch the
   `EOU -> first audio` budget in the metrics report (see the README latency
   section) once media is going over SIP.

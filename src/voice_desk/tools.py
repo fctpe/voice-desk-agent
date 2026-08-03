@@ -1,12 +1,19 @@
 """The front-desk agent and its function tools.
 
-The tools are the only way the model can touch the world. Two design choices
+The tools are the only way the model can touch the world. Three design choices
 matter most:
 
 * **Server-issued slot ids (anti-hallucination).** ``check_availability`` mints
   ids and records them in a per-call cache on the shared :class:`DeskContext`.
   ``book_appointment`` / ``reschedule_appointment`` refuse any id that was not
   handed out during this call, so the model cannot invent a plausible time.
+* **One identity per call (authorization).** ``authenticated_phone`` is the
+  number this call is authenticated *as*, and ``cancel``/``reschedule`` reach
+  into the calendar by number, so they refuse any other one. Saying a number out
+  loud is not proof of owning it, so without this a caller could cancel a
+  stranger's appointment by reciting it. Nothing the caller can ask for is
+  allowed to *set* that number either — a tool that mints the identity hands out
+  the authority it guards (ADR-0006).
 * **Failures are spoken, not raised.** Provider outages come back as calm,
   actionable guidance for the model ("offer to take a message"), never as an
   exception that would drop the call.
@@ -37,6 +44,8 @@ from .providers import (
     Slot,
     SlotUnavailableError,
 )
+from .providers.memory import _digits
+from .tracing import traced_tool
 
 
 @dataclass
@@ -50,6 +59,18 @@ class DeskContext:
 
     # Anti-hallucination cache: slot ids this call has actually offered.
     issued_slots: dict[str, Slot] = field(default_factory=dict)
+
+    # Whose existing appointments this call may reach into, bound once (see
+    # _identity_refusal). On a real trunk the agent sets it from SIP caller-ID
+    # before the first turn; off-trunk it is the first number the caller states,
+    # which is weaker on purpose (ADR-0006).
+    authenticated_phone: str | None = None
+
+    # Whether the caller's own word may become that identity. Off-trunk it is
+    # the only identity on offer. On a trunk caller-ID is the identity, so a call
+    # whose caller-ID never arrived stays unidentified rather than degrading to
+    # what the caller says — that degradation is the attack (ADR-0006).
+    allow_caller_stated_identity: bool = True
 
     # Conversation memory / audit trail.
     caller: Contact | None = None
@@ -123,15 +144,22 @@ class FrontDeskAgent(Agent):
 
     # -- identification -----------------------------------------------------
     @function_tool
+    @traced_tool
     async def identify_caller(self, ctx: RunContext[DeskContext], phone: str) -> str:
         """Look up a caller by their phone number to greet returning customers by name.
 
-        Call this once, early, if the caller provides a phone number.
+        Call this once, early, with the caller's own number. That first number is
+        the only one whose appointments this call can then change.
 
         Args:
             phone: The caller's phone number, in any format.
         """
         data = ctx.userdata
+        # Off-trunk this is the only identity the call gets. Bind it once: a
+        # second number — a caller "correcting" themselves, or one spoken over
+        # caller-ID — must never take over the call's identity.
+        if data.allow_caller_stated_identity and data.authenticated_phone is None:
+            data.authenticated_phone = phone
         try:
             contact = await data.contacts.lookup(phone)
         except ProviderError:
@@ -144,6 +172,7 @@ class FrontDeskAgent(Agent):
 
     # -- availability -------------------------------------------------------
     @function_tool
+    @traced_tool
     async def check_availability(
         self, ctx: RunContext[DeskContext], day_preference: str, time_window: str
     ) -> str:
@@ -189,6 +218,7 @@ class FrontDeskAgent(Agent):
 
     # -- booking ------------------------------------------------------------
     @function_tool
+    @traced_tool
     async def book_appointment(
         self,
         ctx: RunContext[DeskContext],
@@ -215,9 +245,14 @@ class FrontDeskAgent(Agent):
         except ProviderError:
             return "The calendar is temporarily unavailable; the booking could not be completed."
         data.bookings.append(booking)
+        # Deliberately leaves authenticated_phone alone. Booking for someone else
+        # (a landlord for a tenant) is normal work, so this number is a claim,
+        # not a proof — binding it would let an unidentified caller mint the very
+        # identity cancel/reschedule check against (ADR-0006).
         return f"Booked: {booking.slot.spoken()} for {name}, phone {spell_digits(phone)}."
 
     @function_tool
+    @traced_tool
     async def reschedule_appointment(
         self, ctx: RunContext[DeskContext], phone: str, new_slot_id: str
     ) -> str:
@@ -231,6 +266,9 @@ class FrontDeskAgent(Agent):
             new_slot_id: The id of a NEW slot returned by check_availability.
         """
         data = ctx.userdata
+        refusal = _identity_refusal(data, phone)
+        if refusal:
+            return refusal
         if new_slot_id not in data.issued_slots:
             return "That slot id was not among the times offered in this call."
         try:
@@ -242,6 +280,7 @@ class FrontDeskAgent(Agent):
         return f"Rescheduled to {booking.slot.spoken()}."
 
     @function_tool
+    @traced_tool
     async def cancel_appointment(self, ctx: RunContext[DeskContext], phone: str) -> str:
         """Cancel the caller's existing appointment.
 
@@ -249,6 +288,9 @@ class FrontDeskAgent(Agent):
             phone: The phone number the appointment was booked under.
         """
         data = ctx.userdata
+        refusal = _identity_refusal(data, phone)
+        if refusal:
+            return refusal
         try:
             booking = await data.calendar.cancel(phone)
         except BookingNotFoundError:
@@ -259,6 +301,7 @@ class FrontDeskAgent(Agent):
 
     # -- escalation ---------------------------------------------------------
     @function_tool
+    @traced_tool
     async def take_message(
         self,
         ctx: RunContext[DeskContext],
@@ -285,13 +328,18 @@ class FrontDeskAgent(Agent):
 
     # -- confirmation -------------------------------------------------------
     @function_tool
+    @traced_tool
     async def send_confirmation(self, ctx: RunContext[DeskContext], phone: str) -> str:
-        """Send a calendar confirmation for the caller's most recent booking.
+        """Send a calendar confirmation for a booking made during this call.
 
         Args:
             phone: The phone number the appointment was booked under.
         """
         data = ctx.userdata
+        # Not identity-checked, unlike cancel/reschedule: _latest_booking_for
+        # only ever sees bookings this call made itself, so there is no stranger's
+        # appointment within reach. A landlord who books for a tenant can confirm
+        # it, which is the flow the prompt promises (ADR-0006).
         booking = _latest_booking_for(data, phone)
         if booking is None:
             return "There is no booking on file for that phone number to confirm."
@@ -309,6 +357,36 @@ def _format_options(slots: list[Slot]) -> str:
     )
 
 
+def _identity_refusal(data: DeskContext, phone: str) -> str | None:
+    """Why ``phone`` may not be acted on, or None if it is this caller's own.
+
+    Strict phone matching decides *which* booking a number refers to; it says
+    nothing about who is allowed to touch it. That is this check, and it guards
+    the two tools that reach into the calendar by number. Fails closed — with
+    nothing bound there is no one to compare against, so no.
+
+    Nothing bound has two causes with two different ways out, so it says which:
+    off-trunk the model simply has not identified the caller yet, but on a trunk
+    the caller-ID never arrived and no amount of identifying will help.
+    """
+    if data.authenticated_phone is None:
+        if data.allow_caller_stated_identity:
+            return (
+                "This call has no identified caller number yet; call identify_caller with the "
+                "caller's own number before changing any appointment."
+            )
+        return (
+            "This call has no identified caller number and cannot get one, so no existing "
+            "appointment can be changed; offer to take a message instead."
+        )
+    if _digits(phone) != _digits(data.authenticated_phone):
+        return (
+            "That number is not this caller's own number; only the appointment booked under "
+            "the number this call is identified with can be changed."
+        )
+    return None
+
+
 def _latest_booking_for(data: DeskContext, phone: str) -> Booking | None:
     """The caller's most recent active booking, matched strictly by phone.
 
@@ -316,8 +394,6 @@ def _latest_booking_for(data: DeskContext, phone: str) -> Booking | None:
     number never made would send the wrong appointment and falsely report
     success — cancel/reschedule match strictly too, and this must match them.
     """
-    from .providers.memory import _digits
-
     key = _digits(phone)
     for booking in reversed(data.bookings):
         if _digits(booking.phone) == key and booking.status != "cancelled":

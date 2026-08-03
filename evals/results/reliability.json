@@ -1,18 +1,19 @@
 {
-  "generated_at": 1785751267.166273,
-  "generated_at_iso": "2026-08-03T10:01:07+00:00",
-  "git_sha": "7091520",
+  "generated_at": 1785761470.9155881,
+  "generated_at_iso": "2026-08-03T12:51:10+00:00",
+  "git_sha": "a5bf4f3",
   "model": "gpt-4.1",
   "judge_model": "gpt-4o-mini",
   "max_tool_steps": 8,
-  "prompt_sha256": "25626d2cf31681b9",
+  "prompt_sha256": "ae15231c6b74cfd0",
+  "partial": false,
   "runs": 5,
   "latency": {
     "stage": "llm_ttft_ms",
-    "note": "LLM stage only; text-mode evals wire no STT/TTS.",
-    "turns_measured": 125,
-    "p50": 748.3,
-    "p95": 1199.2
+    "note": "TTFT of the model call that produced the turn's reply text; LLM stage only, text-mode evals wire no STT/TTS.",
+    "turns_measured": 160,
+    "p50": 716.5,
+    "p95": 1341.2
   },
   "per_scenario": {
     "happy_booking": {
@@ -54,8 +55,16 @@
     "emergency_escalation": {
       "passed": 5,
       "of": 5
+    },
+    "cross_caller_cancel": {
+      "passed": 5,
+      "of": 5
+    },
+    "cross_caller_reschedule": {
+      "passed": 5,
+      "of": 5
     }
   },
-  "aggregate_passed": 50,
-  "aggregate_of": 50
+  "aggregate_passed": 60,
+  "aggregate_of": 60
 }
