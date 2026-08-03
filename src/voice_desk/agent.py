@@ -22,7 +22,14 @@ from livekit.agents import (
     TurnHandlingOptions,
     inference,
 )
-from livekit.plugins import silero
+
+# Every provider plugin is imported here, at module scope, and none of them
+# lazily inside the build helpers below: importing a plugin registers it, and
+# livekit-agents 1.6 refuses to register one off the main thread. `entrypoint`
+# runs on a job thread (console mode) so a lazy import there crashes the call
+# with "Plugins must be registered on the main thread". This module is imported
+# by `__main__` on the main thread, which is exactly where registration belongs.
+from livekit.plugins import cartesia, deepgram, openai, silero
 
 from .config import Settings
 from .metrics import CallMetrics
@@ -107,14 +114,10 @@ async def _caller_id(ctx: JobContext, *, expect_trunk: bool) -> str | None:
 # -- pipeline assembly ------------------------------------------------------
 def _build_stt(settings: Settings):
     if settings.stt_provider == "deepgram":
-        from livekit.plugins import deepgram
-
         return deepgram.STT(
             model=settings.stt_model or "nova-3",
             language=settings.stt_language or "en-US",
         )
-    from livekit.plugins import openai
-
     return openai.STT(
         model=settings.stt_model or "gpt-4o-mini-transcribe",
         language=settings.stt_language or "en",
@@ -123,15 +126,11 @@ def _build_stt(settings: Settings):
 
 def _build_tts(settings: Settings):
     if settings.tts_provider == "cartesia":
-        from livekit.plugins import cartesia
-
         return cartesia.TTS(
             model=settings.tts_model or "sonic-3",
             voice=settings.resolved_tts_voice,
             language="en",
         )
-    from livekit.plugins import openai
-
     return openai.TTS(
         model=settings.tts_model or "gpt-4o-mini-tts",
         voice=settings.resolved_tts_voice,

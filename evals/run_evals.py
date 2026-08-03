@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 # Make `voice_desk` importable when run as a script from the repo root.
 _ROOT = Path(__file__).resolve().parent.parent
@@ -494,6 +495,12 @@ def _write_json(results: list[ScenarioResult], *, partial: bool) -> Path:
 
 
 def main() -> int:
+    # The README tells you to put OPENAI_API_KEY in .env, and the agent CLI reads
+    # it from there — so the eval harness has to as well, or `make eval` reports
+    # a missing key that is sitting right where the docs said to put it.
+    # override=False: a key already exported in the shell wins, as in __main__.
+    load_dotenv(override=False)
+
     parser = argparse.ArgumentParser(description="Run front-desk agent evals (text mode).")
     parser.add_argument("--list", action="store_true", help="List scenarios (no LLM calls).")
     parser.add_argument("--smoke", action="store_true", help=f"Run first {SMOKE_COUNT} scenarios.")
