@@ -29,8 +29,12 @@ def _ms(seconds: float | None) -> float | None:
     return round(seconds * 1000.0, 1)
 
 
-def _percentile(values: list[float], pct: float) -> float | None:
-    """Nearest-rank percentile (no numpy dependency)."""
+def percentile(values: list[float], pct: float) -> float | None:
+    """Nearest-rank percentile (no numpy dependency).
+
+    Public because the eval harness reuses it to summarise LLM TTFT across
+    scenarios — the same maths, so it must not be reimplemented there.
+    """
     if not values:
         return None
     ordered = sorted(values)
@@ -128,7 +132,7 @@ class CallMetrics:
             "call_id": self.call_id,
             "turns": len(self._turns),
             "percentiles": {
-                name: {"p50": _percentile(vals, 50), "p95": _percentile(vals, 95)}
+                name: {"p50": percentile(vals, 50), "p95": percentile(vals, 95)}
                 for name, vals in stages.items()
             },
         }

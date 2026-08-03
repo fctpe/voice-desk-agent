@@ -4,22 +4,22 @@ from __future__ import annotations
 
 from livekit.agents import metrics as lk_metrics
 
-from voice_desk.metrics import CallMetrics, TurnLatency, _percentile
+from voice_desk.metrics import CallMetrics, TurnLatency, percentile
 
 
 def test_percentile_empty():
-    assert _percentile([], 50) is None
+    assert percentile([], 50) is None
 
 
 def test_percentile_single():
-    assert _percentile([42.0], 95) == 42.0
+    assert percentile([42.0], 95) == 42.0
 
 
 def test_percentile_interpolates():
     values = [100.0, 200.0, 300.0, 400.0]
-    assert _percentile(values, 50) == 250.0
+    assert percentile(values, 50) == 250.0
     # p95 of 4 points sits near the top of the range.
-    assert _percentile(values, 95) == 385.0
+    assert percentile(values, 95) == 385.0
 
 
 def test_turn_response_requires_core_stages():
