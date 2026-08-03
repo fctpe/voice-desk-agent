@@ -1,5 +1,9 @@
 # voice-desk-agent
 
+[![CI](https://github.com/fctpe/voice-desk-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/fctpe/voice-desk-agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+
 **Riley** — an AI voice front desk for field-service businesses, built on
 [LiveKit Agents](https://github.com/livekit/agents). Riley answers the phone for
 a (fictional) plumbing and heating company, books and reschedules appointments,
@@ -158,8 +162,6 @@ Getting there was eval-driven, and every fix is in the git history:
 5. **Transient API timeouts** are absorbed by a 60 s timeout + 5 retries so a
    network hiccup never counts as an agent failure.
 
-<!-- EVAL_RESULTS -->
-
 ---
 
 ## Latency
@@ -179,22 +181,30 @@ JSON report to the metrics directory (`metrics.py`).
 
 ### Measured
 
-The **LLM** stage — the largest and the one under our control — measured over 12
-representative turns:
+The **LLM** stage — the largest and the one under our control — captured by the
+same `metrics.py` collector the live agent uses, over every agent turn of the
+reliability sweep:
 
-| model | TTFT p50 | TTFT p95 |
-|---|---|---|
-| `gpt-4.1` | ~740 ms | ~1.8 s |
+| model | TTFT p50 | TTFT p95 | turns |
+|---|---|---|---|
+| `gpt-4.1` | 748 ms | 1199 ms | 125 |
+
+Committed under [`evals/results/reliability.json`](evals/results/reliability.json)
+(`latency` block, stamped with the model, prompt hash and commit that produced
+it). Reproduce with `uv run python evals/run_evals.py --runs 5`.
 
 That is the honest tradeoff behind the model choice: `gpt-4.1` is the reliable
 tool-caller (100 % above) but not the fastest. Added to a streaming STT
 (~150 ms) and Cartesia Sonic TTS (~90 ms TTFB), the end-to-end EOU→first-audio
 budget lands around **~1 s p50** — a touch above the 500–800 ms ideal.
 `gpt-4.1-mini` roughly halves the LLM stage for latency-sensitive deployments,
-at some cost to multi-tool reliability (set `LLM_MODEL=gpt-4.1-mini`). The full
-EOU→first-audio number is captured live per call by `metrics.py`; the LLM figure
-here is measured, the STT/TTS figures are the providers' published streaming
-TTFBs.
+at some cost to multi-tool reliability (set `LLM_MODEL=gpt-4.1-mini`).
+
+Two caveats, stated rather than buried: the eval harness runs in **text mode**,
+so this measures the LLM stage only — the STT/TTS figures above are the
+providers' published streaming TTFBs, not measurements. And the full
+EOU→first-audio number is captured per call by `metrics.py` during a real voice
+call, which is not something a committed artifact in this repo can prove.
 
 ---
 
