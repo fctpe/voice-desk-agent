@@ -35,13 +35,13 @@ packages = ["src/voice_desk"]
 # Installed by `uv sync` (dev group is on by default). Keeps lint + test
 # available without a separate install step.
 dev = [
-    "ruff>=0.6",
+    "ruff>=0.16.1",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     # evals/run_evals.py imports AsyncOpenAI directly for the conversation-level
     # judge. It arrives transitively via livekit-agents[openai], but relying on
     # that would break the eval harness the day LiveKit drops the extra.
-    "openai>=2.0,<3",
+    "openai>=2.51.0,<3",
 ]
 
 [tool.ruff]
