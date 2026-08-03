@@ -32,7 +32,13 @@ metrics/
 evals/results/*
 !evals/results/reliability.json
 !evals/results/evals.json
+!evals/results/behaviors.xml
 !evals/results/.gitkeep
+
+# Behavior traces are recorded per run. Commit only the one the behavior gate's
+# baseline was measured against; the rest are scratch.
+evals/traces/*
+!evals/traces/cross_caller_cancel.trace.json
 
 # Editors / OS
 .idea/

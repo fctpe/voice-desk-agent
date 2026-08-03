@@ -1,0 +1,5 @@
+{
+  "behaviors": {
+    "no-mutation-without-caller-identity": "true"
+  }
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="agent-behavior-evals" tests="1" failures="0" skipped="0" time="21.915">
+    <testcase classname="agentbehavior" name="no-mutation-without-caller-identity" time="21.915"></testcase>
+  </testsuite>
+</testsuites>

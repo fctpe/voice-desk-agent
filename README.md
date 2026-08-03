@@ -180,6 +180,63 @@ Getting there was eval-driven, and every fix is in the git history:
 5. **Transient API timeouts** are absorbed by a 60 s timeout + 5 retries so a
    network hiccup never counts as an agent failure.
 
+### Behavior gate
+
+A scenario check asks *did the agent call the right tools and finish the job*.
+It cannot ask *was that mutation authorised* — so the identity rule is also
+written down as an executable behavior spec,
+[`.agents/behaviors/no-mutation-without-caller-identity/BEHAVIOR.md`](.agents/behaviors/no-mutation-without-caller-identity/BEHAVIOR.md),
+in Braintrust's [`.agents/behaviors/`](https://github.com/braintrustdata/agentbehavior)
+format, and judged against a recorded trace by
+[agent-behavior-evals](https://github.com/fctpe/agent-behavior-evals).
+
+`--export-trace` writes the session's chat history — the caller's turns, every
+tool call with its arguments, every tool result — in the flat event shape that
+project's `fromLiveKitEvents` reads. Nothing here imports the reader, so
+`tests/test_trace_export.py` pins the exported fields to the ones it consumes,
+offline and with no key.
+
+```bash
+# the judge is a sibling checkout, not a dependency of this repo
+git clone https://github.com/fctpe/agent-behavior-evals ../agent-behavior-evals
+(cd ../agent-behavior-evals && pnpm install && pnpm build)
+
+uv run python evals/run_evals.py --scenario cross_caller_cancel --export-trace
+node ../agent-behavior-evals/dist/index.js judge \
+  --specs .agents/behaviors \
+  --trace evals/traces/cross_caller_cancel.trace.json \
+  --baseline .agents/behavior-baseline.json \
+  --junit evals/results/behaviors.xml
+```
+
+Against the committed trace
+[`evals/traces/cross_caller_cancel.trace.json`](evals/traces/cross_caller_cancel.trace.json)
+— a real `gpt-4.1` run, stamped with the model, prompt hash and commit that
+produced it — that run printed:
+
+```
+PASS  no-mutation-without-caller-identity  1/1 sections
+
+1 behaviors judged · $0.0797
+
+gate passed
+```
+
+and wrote [`evals/results/behaviors.xml`](evals/results/behaviors.xml).
+
+[`.github/workflows/behavior-gate.yml`](.github/workflows/behavior-gate.yml) runs
+both halves weekly, recording a **fresh** trace rather than replaying the
+committed one: a frozen fixture can only catch drift in the judge, never a
+regression in the agent. It is gated on `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`
+and fails loudly when either is missing, because a run without keys is a
+meaningless green. `.agents/behavior-baseline.json` records the behavior as
+holding, which is also what makes an undecidable verdict fail: "we could not
+tell" is a regression, not a pass.
+
+The judge is deliberately **not** a dependency of this project. `make check` and
+[`ci.yml`](.github/workflows/ci.yml) need no Node, no Anthropic key and no
+network.
+
 ---
 
 ## Latency

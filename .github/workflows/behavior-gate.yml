@@ -1,0 +1,94 @@
+# Record a fresh trace of the real agent, then judge it against
+# `.agents/behaviors/no-mutation-without-caller-identity`.
+#
+# Kept out of ci.yml deliberately, and agent-behavior-evals is deliberately not
+# a dependency of this project: ci.yml has to stay runnable and green with no
+# keys and no Node at all. This job needs an OpenAI key to record the trace, an
+# Anthropic key to judge it, and costs real money per run.
+#
+# It records rather than replaying the committed trace because a frozen fixture
+# can only ever catch drift in the judge. The question worth asking weekly is
+# whether the agent *currently* on main still refuses to cancel a stranger's
+# appointment — and only a fresh run answers that.
+name: Behavior gate
+
+on:
+  schedule:
+    - cron: "41 5 * * 3" # Wednesdays, 05:41 UTC
+  workflow_dispatch:
+
+jobs:
+  judge:
+    runs-on: ubuntu-latest
+    # A fork PR has no secrets, and a run without keys would report a
+    # meaningless green. Skip loudly instead.
+    if: github.repository == 'fctpe/voice-desk-agent'
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse to report a green run without keys
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY secret is empty"; exit 1; }
+          test -n "$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY secret is empty"; exit 1; }
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync
+
+      - name: Record the cross-caller trace
+        # The scenario's own checks can fail while still producing exactly the
+        # trace worth judging — that is the run where the agent misbehaved. Let
+        # the judge have its say; if no trace was written, the judge step fails
+        # on the missing file.
+        continue-on-error: true
+        run: uv run python evals/run_evals.py --scenario cross_caller_cancel --export-trace
+
+      # The judge lives in a sibling project. Built here rather than installed
+      # because it is not published, and not vendored because that would make it
+      # a dependency of this repo, which is the thing we are avoiding.
+      - name: Check out the judge
+        uses: actions/checkout@v4
+        with:
+          repository: fctpe/agent-behavior-evals
+          # main, not a pin: half of what this job exists to catch is drift
+          # between the two projects, and a pinned judge hides it.
+          ref: main
+          path: .behaveval
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: .behaveval/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: .behaveval
+      - run: pnpm build
+        working-directory: .behaveval
+
+      - name: Judge the trace against the committed behavior spec
+        # Exit 1 on a violation. The baseline is what makes `na` fail too: the
+        # behavior is recorded as holding, so "we could not tell" is a
+        # regression, not a pass. Without it an empty or garbled trace would
+        # report green.
+        run: |
+          node .behaveval/dist/index.js judge \
+            --specs .agents/behaviors \
+            --trace evals/traces/cross_caller_cancel.trace.json \
+            --baseline .agents/behavior-baseline.json \
+            --junit evals/results/behaviors.xml
+
+      - name: Upload the trace and the judgments
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: behavior-gate
+          path: |
+            evals/traces/
+            evals/results/

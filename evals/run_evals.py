@@ -19,6 +19,7 @@ Usage:
     python evals/run_evals.py             # all scenarios, one pass
     python evals/run_evals.py --runs 5    # reliability: 5 passes per scenario
     python evals/run_evals.py --scenario emergency_escalation
+    python evals/run_evals.py --scenario cross_caller_cancel --export-trace
 """
 
 from __future__ import annotations
@@ -45,7 +46,13 @@ sys.path.insert(0, str(_ROOT / "src"))
 
 SCENARIO_DIR = Path(__file__).resolve().parent / "scenarios"
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
+TRACE_DIR = Path(__file__).resolve().parent / "traces"
 SMOKE_COUNT = 3
+
+# The chat items a trace carries. `agent_handoff` and `agent_config_update` are
+# session bookkeeping, not conduct, and the reader on the other end has no field
+# for them — emitting them would only pad the trace with empty events.
+TRACE_ITEM_TYPES = ("message", "function_call", "function_call_output")
 
 
 @dataclass
@@ -111,6 +118,7 @@ class ScenarioResult:
     # assistant message. Text mode wires no STT/TTS, so this is the only stage of
     # the response budget the eval run can honestly measure.
     llm_ttft_ms: list[float] = field(default_factory=list)
+    trace_path: Path | None = None
 
     @property
     def passed(self) -> bool:
@@ -123,8 +131,12 @@ def _tool_names(result: Any) -> list[str]:
     return [ev.item.name for ev in result.events if isinstance(ev, FunctionCallEvent)]
 
 
-async def run_scenario(scenario: Scenario) -> ScenarioResult:
-    """Drive one scenario end-to-end and collect pass/fail checks."""
+async def run_scenario(scenario: Scenario, *, trace_dir: Path | None = None) -> ScenarioResult:
+    """Drive one scenario end-to-end and collect pass/fail checks.
+
+    With ``trace_dir`` set, the session's chat history is also written out as a
+    behavior trace (see :func:`_write_trace`).
+    """
     from livekit.agents import AgentSession
 
     from voice_desk.config import Settings
@@ -213,6 +225,12 @@ async def run_scenario(scenario: Scenario) -> ScenarioResult:
         result_obj.llm_ttft_ms = [
             turn["llm_ttft_ms"] for turn in report["turns"] if turn["llm_ttft_ms"] is not None
         ]
+        if trace_dir is not None:
+            # In the finally and before aclose(), so a scenario that blew up
+            # still leaves the trace of how far it got. The provenance block
+            # records that it failed, so a partial trace cannot pass itself off
+            # as a clean run.
+            result_obj.trace_path = _write_trace(scenario, session, result_obj, trace_dir)
         try:
             await session.aclose()
         except Exception:  # pragma: no cover - teardown best-effort
@@ -233,6 +251,68 @@ def _transcript(session: Any) -> str:
         if text.strip():
             lines.append(f"{role.upper()}: {text.strip()}")
     return "\n".join(lines)
+
+
+def trace_events(session: Any) -> list[dict[str, Any]]:
+    """Flatten the session's chat history into the flat event list that
+    agent-behavior-evals' LiveKit adapter reads.
+
+    The shape is not ours to choose: ``fromLiveKitEvents`` in that project's
+    ``src/trace.ts`` looks for ``id`` / ``type`` / ``ts`` on the row and
+    ``role`` / ``text_content`` / ``name`` / ``arguments`` / ``output`` on
+    ``item``. Nothing else is read, so nothing else is emitted — a field the
+    reader ignores is a field that lies about being part of the contract.
+
+    Built from ``session.history`` rather than the per-turn ``RunResult.events``
+    because history is the whole call in one ordered list, and because
+    ``RunResult`` only records what the *agent* produced: the caller's own turns
+    are absent from it, and "which number did the caller claim" is exactly what
+    a caller-identity behavior turns on.
+    """
+    events: list[dict[str, Any]] = []
+    for item in session.history.items:
+        if item.type not in TRACE_ITEM_TYPES:
+            continue
+        if item.type == "message":
+            payload: dict[str, Any] = {"role": item.role, "text_content": item.text_content or ""}
+        elif item.type == "function_call":
+            payload = {"name": item.name, "arguments": item.arguments}
+        else:
+            payload = {"name": item.name, "output": item.output}
+        events.append(
+            {
+                "id": item.id,
+                "type": item.type,
+                "ts": datetime.fromtimestamp(item.created_at, UTC).isoformat(
+                    timespec="milliseconds"
+                ),
+                "item": payload,
+            }
+        )
+    return events
+
+
+def _write_trace(scenario: Scenario, session: Any, result: ScenarioResult, out_dir: Path) -> Path:
+    """Write one scenario's trace for `behaveval judge` to score.
+
+    The provenance block rides alongside ``events`` — the reader ignores keys it
+    does not know — so a committed trace always says which model, which prompt
+    and which commit produced it. A trace whose origin cannot be stated is not
+    evidence of anything.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{scenario.id}.trace.json"
+    payload = {
+        "provenance": {
+            **_provenance(),
+            "scenario": scenario.id,
+            "scenario_source": scenario.source,
+            "scenario_passed": result.passed,
+        },
+        "events": trace_events(session),
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
 
 
 async def _judge_conversation(session: Any, intent: str) -> Check:
@@ -271,11 +351,13 @@ async def _judge_conversation(session: Any, intent: str) -> Check:
         await client.close()
 
 
-async def run_all(scenarios: list[Scenario]) -> list[ScenarioResult]:
+async def run_all(
+    scenarios: list[Scenario], *, trace_dir: Path | None = None
+) -> list[ScenarioResult]:
     results: list[ScenarioResult] = []
     for scenario in scenarios:
         print(f"  running {scenario.id} ...", flush=True)
-        results.append(await run_scenario(scenario))
+        results.append(await run_scenario(scenario, trace_dir=trace_dir))
     return results
 
 
@@ -423,6 +505,12 @@ def main() -> int:
         help="Run every scenario N times and report per-scenario reliability. "
         "A real LLM agent is not perfectly deterministic; use this to measure it.",
     )
+    parser.add_argument(
+        "--export-trace",
+        action="store_true",
+        help=f"Also write each scenario's trace to {TRACE_DIR.name}/<id>.trace.json for "
+        "`behaveval judge` to score against .agents/behaviors/.",
+    )
     args = parser.parse_args()
 
     scenarios = load_scenarios()
@@ -440,6 +528,15 @@ def main() -> int:
             return 2
     elif args.smoke:
         scenarios = scenarios[:SMOKE_COUNT]
+
+    if args.export_trace and args.runs > 1:
+        # One path per scenario, so run N would leave only the last pass and
+        # silently call it "the" trace. Refuse rather than overwrite.
+        print(
+            "--export-trace writes one trace per scenario; it cannot be used with --runs > 1.",
+            file=sys.stderr,
+        )
+        return 2
 
     if not os.getenv("OPENAI_API_KEY"):
         print(
@@ -486,10 +583,13 @@ def main() -> int:
         print(f"wrote {out}")
         return 0 if total_pass == total else 1
 
-    results = asyncio.run(run_all(scenarios))
+    results = asyncio.run(run_all(scenarios, trace_dir=TRACE_DIR if args.export_trace else None))
     _print_table(results)
     path = _write_json(results, partial=bool(args.smoke or args.scenario))
     print(f"wrote {path}")
+    for r in results:
+        if r.trace_path is not None:
+            print(f"wrote {r.trace_path}")
     return 0 if all(r.passed for r in results) else 1
 
 
