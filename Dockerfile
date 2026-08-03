@@ -1,7 +1,7 @@
 # Container image for running the agent worker in server ("start") mode.
 # The console demo is meant for a local machine with audio devices; this image
 # targets a LiveKit deployment (see docs/telephony.md).
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # uv for fast, reproducible installs from the lockfile. Pinned: `uv:latest`
 # makes the image non-reproducible across rebuilds.
