@@ -37,9 +37,11 @@ Two more reliability bugs surfaced while fixing this:
 
 ## Consequences
 
-- Reliability went from 3/10 (single run) to **50/50 scenario-runs across 5 full
-  passes**. The `--runs N` flag makes that reliability, not a single lucky pass,
-  the reported number.
+- Reliability went from 3/10 (single run) to **59/60 scenario-runs across 5 full
+  passes** of the suite as it now stands (10 scenarios then, 12 now). The
+  `--runs N` flag makes that reliability, not a single lucky pass, the reported
+  number — and the one scenario still moving, `unknown_caller` at ~80 %, is
+  named in the README rather than averaged away.
 - gpt-4.1 costs more and is slower than mini (~740 ms TTFT p50 vs mini's ~half);
   the README states the tradeoff and the model is one env var to change.
 - Because tool outputs no longer carry instructions, the prompt is the single
