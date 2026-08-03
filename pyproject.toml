@@ -9,7 +9,7 @@ authors = [{ name = "Furkan" }]
 keywords = ["voice-agent", "livekit", "ai", "front-desk", "receptionist", "appointment-booking"]
 
 dependencies = [
-    "livekit-agents[cartesia,deepgram,openai,silero]>=1.6,<1.7",
+    "livekit-agents[cartesia,deepgram,openai,silero]>=1.6.7,<1.7",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
     # voice_desk.tracing imports these directly. They already arrive as hard
