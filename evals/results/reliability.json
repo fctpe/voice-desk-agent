@@ -1,7 +1,7 @@
 {
-  "generated_at": 1785796102.0891469,
-  "generated_at_iso": "2026-08-03T22:28:22+00:00",
-  "git_sha": "9a48eb6",
+  "generated_at": 1785829935.111701,
+  "generated_at_iso": "2026-08-04T07:52:15+00:00",
+  "git_sha": "caf067e",
   "model": "gpt-4.1",
   "judge_model": "gpt-4o-mini",
   "max_tool_steps": 8,
@@ -11,9 +11,9 @@
   "latency": {
     "stage": "llm_ttft_ms",
     "note": "TTFT of the model call that produced the turn's reply text; LLM stage only, text-mode evals wire no STT/TTS.",
-    "turns_measured": 161,
-    "p50": 686.4,
-    "p95": 1061.4
+    "turns_measured": 160,
+    "p50": 647.5,
+    "p95": 1134.1
   },
   "per_scenario": {
     "happy_booking": {

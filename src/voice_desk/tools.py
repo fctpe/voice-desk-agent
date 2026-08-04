@@ -28,7 +28,14 @@ from typing import Any
 from livekit.agents import Agent, RunContext, function_tool
 
 from .config import Settings
-from .prompts import BUSINESS_ADDRESS, BUSINESS_NAME, OWNER_NAME, SYSTEM_PROMPT, spell_digits
+from .prompts import (
+    BUSINESS_ADDRESS,
+    BUSINESS_NAME,
+    OWNER_NAME,
+    SYSTEM_PROMPT,
+    spell_digits,
+    spoken_number,
+)
 from .providers import (
     Booking,
     BookingNotFoundError,
@@ -160,15 +167,34 @@ class FrontDeskAgent(Agent):
         # caller-ID — must never take over the call's identity.
         if data.allow_caller_stated_identity and data.authenticated_phone is None:
             data.authenticated_phone = phone
+        # Every branch below names the number it looked up, spelled out. It used
+        # to say "that phone number" — a pronoun for a value the tool is holding.
+        #
+        # That reads as a wording nicety and is not one. The eval scenario that
+        # only passed ~80% of the time failed in exactly the runs where the model
+        # chained `check_availability` before speaking: with the digits nowhere
+        # in the tool output, reading them back means recovering them from the
+        # transcript and splitting them itself, and that got dropped the moment
+        # anything else came between the number and the reply. The runs that
+        # passed are the ones where it answered immediately.
+        #
+        # So the digits go in the fact. Not an instruction to read them back —
+        # tool output stating what the tool did, which is what a lookup result
+        # is, and which happens to be the string the caller needs to hear. It
+        # also lets the model catch its own transcription error, because the
+        # number it passed is now visible rather than assumed.
+        spoken = spoken_number(phone)
         try:
             contact = await data.contacts.lookup(phone)
         except ProviderError:
-            return "Customer records are unavailable; no caller record could be loaded."
+            return (
+                f"Customer records are unavailable; no caller record could be loaded for {spoken}."
+            )
         if contact is None:
-            return "No customer record exists for that phone number (new caller)."
+            return f"No customer record exists for {spoken} (new caller)."
         data.caller = contact
         note = f" Note: {contact.notes}." if contact.notes else ""
-        return f"Returning customer: {contact.name}.{note}"
+        return f"Returning customer: {contact.name}, at {spoken}.{note}"
 
     # -- availability -------------------------------------------------------
     @function_tool
@@ -274,7 +300,7 @@ class FrontDeskAgent(Agent):
         try:
             booking = await data.calendar.reschedule(phone=phone, new_slot_id=new_slot_id)
         except BookingNotFoundError:
-            return "No existing appointment is on file for that phone number."
+            return f"No existing appointment is on file for {spoken_number(phone)}."
         except ProviderError:
             return "The calendar is temporarily unavailable; the reschedule could not be made."
         return f"Rescheduled to {booking.slot.spoken()}."
@@ -294,7 +320,7 @@ class FrontDeskAgent(Agent):
         try:
             booking = await data.calendar.cancel(phone)
         except BookingNotFoundError:
-            return "No active appointment is on file for that phone number."
+            return f"No active appointment is on file for {spoken_number(phone)}."
         except ProviderError:
             return "The calendar is temporarily unavailable; the cancellation could not be made."
         return f"Cancelled the appointment that was on {booking.slot.spoken()}."
@@ -342,7 +368,7 @@ class FrontDeskAgent(Agent):
         # it, which is the flow the prompt promises (ADR-0006).
         booking = _latest_booking_for(data, phone)
         if booking is None:
-            return "There is no booking on file for that phone number to confirm."
+            return f"There is no booking on file for {spoken_number(phone)} to confirm."
         try:
             path = await data.confirmations.send(booking)
         except ProviderError:

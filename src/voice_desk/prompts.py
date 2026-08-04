@@ -44,6 +44,20 @@ def spell_digits(value: str) -> str:
     return ", ".join(words)
 
 
+def spoken_number(value: str) -> str:
+    """The digits of `value` for speech, or a plain statement that it has none.
+
+    `spell_digits` drops non-digits, so a garbled capture — a caller spelling a
+    word, a transcription that came back as prose — renders as the empty string.
+    Interpolated into "no customer record exists for {} (new caller)" that leaves
+    a hole in the sentence, and a hole is the one thing the agent must not read
+    out loud with confidence. Saying the capture holds no digits is both true and
+    the cue to ask again.
+    """
+    spoken = spell_digits(value)
+    return spoken if spoken else "a number with no digits in it"
+
+
 def build_system_prompt() -> str:
     """Assemble Riley's system prompt from the business facts above."""
     return f"""\

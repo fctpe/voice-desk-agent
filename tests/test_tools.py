@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from voice_desk.config import Settings
+from voice_desk.prompts import spell_digits
 from voice_desk.tools import FrontDeskAgent, build_desk_context
 
 
@@ -113,6 +114,60 @@ async def test_identify_unknown_caller(agent, ctx):
     # Being unknown to the contacts book is not the same as being unidentified:
     # the call is still bound to the number, so they can manage their own booking.
     assert ctx.userdata.authenticated_phone == "+1 555 9999"
+
+
+class TestLookupsNameTheNumberTheyUsed:
+    """Every lookup result spells out the number it was given.
+
+    Not cosmetic. The `unknown_caller` eval scenario asks the agent to read a
+    captured number back digit by digit, and it only passed about four times in
+    five. Transcripts of the failures all have the same shape: the model calls
+    `identify_caller`, chains `check_availability` before it speaks, and by then
+    the read-back is gone. The passing runs are the ones that answered straight
+    after the lookup.
+
+    The output said "that phone number" — a pronoun for a value the tool was
+    holding — so reading the digits back meant recovering them from the
+    transcript and splitting them, unaided, several steps later. Putting them in
+    the fact removes that work. It stays a fact, not an instruction: a lookup
+    result saying which number it looked up (ADR-0005 — imperatives in tool
+    output make the model loop).
+    """
+
+    async def test_unknown_caller_result_spells_the_number(self, agent, ctx):
+        out = await agent.identify_caller(ctx, phone="+1 555 9999")
+        assert "five, five, five, nine, nine, nine, nine" in out
+
+    async def test_known_caller_result_spells_the_number(self, agent, ctx):
+        known = ctx.userdata.contacts.contacts[0]
+        out = await agent.identify_caller(ctx, phone=known.phone)
+        assert spell_digits(known.phone) in out
+        assert "Returning customer" in out
+
+    async def test_no_lookup_result_says_that_phone_number(self, agent, ctx):
+        """The negative control for the whole class.
+
+        Without this, every assertion above is satisfied by output that spells
+        the number *and* keeps the pronoun — which is what a half-finished
+        revert looks like. Pin the phrase's absence, so restoring any one of the
+        old strings turns a test red instead of leaving four green.
+        """
+        outputs = [
+            await agent.identify_caller(ctx, phone="+1 555 9999"),
+            await agent.cancel_appointment(ctx, phone="+1 555 9999"),
+            await agent.reschedule_appointment(ctx, phone="+1 555 9999", new_slot_id="x"),
+            await agent.send_confirmation(ctx, phone="+1 555 9999"),
+        ]
+        for out in outputs:
+            assert "that phone number" not in out, out
+
+    async def test_a_number_with_no_digits_does_not_produce_an_empty_phrase(self, agent, ctx):
+        """`spell_digits` drops non-digits, so a garbled capture spells to "".
+        The sentence must still read as a sentence rather than trailing off into
+        "no customer record exists for  (new caller)"."""
+        out = await agent.identify_caller(ctx, phone="unknown")
+        assert "  " not in out
+        assert out.strip().endswith(".")
 
 
 async def test_cancel_without_booking(agent, ctx):
