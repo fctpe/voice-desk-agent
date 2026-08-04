@@ -11,7 +11,7 @@ Enter
 Sleep 4s
 Type "clear"
 Enter
-Type `echo "── Reliability: 5 full passes of all 10 scenarios ──"`
+Type `echo "── Reliability: 5 full passes of all 12 scenarios ──"`
 Enter
 Sleep 500ms
 Type `jq -r '.per_scenario | to_entries[] | "  \(.key)\t\(.value.passed)/\(.value.of)"' evals/results/reliability.json`

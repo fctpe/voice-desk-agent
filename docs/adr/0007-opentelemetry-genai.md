@@ -94,12 +94,14 @@ literals rather than importing the semconv package.
 - That same test asserts the `agent_turn` / `llm_request` / `function_tool` spans
   and their GenAI attributes. Decision 4 depends on third-party behaviour, so it
   is pinned by a test rather than trusted.
-- **`llm_ttft_ms` changed meaning and the committed latency number predates it.**
-  It used to be the first model call of a turn; it is now the call that produced
-  the turn's reply text, because that is the one `ChatMessage.metrics` reports. A
-  booking turn makes four tool calls, so these are different numbers. The
-  `748 ms` p50 in `evals/results/reliability.json` was measured under the old
-  definition at commit `7091520`; re-run `--runs 5` before quoting it again.
+- **`llm_ttft_ms` changed meaning, and the committed latency number was re-measured
+  under the new one.** It used to be the first model call of a turn; it is now the
+  call that produced the turn's reply text, because that is the one
+  `ChatMessage.metrics` reports. A booking turn makes four tool calls, so these
+  are different numbers and figures from before the change are not comparable.
+  `evals/results/reliability.json` now holds a `--runs 5` sweep taken under the
+  new definition — p50 647.5 ms, p95 1134.1 ms over 160 turns — so the warning
+  that used to sit here is closed.
 - `response_ms` is now `e2e_latency` from the SDK rather than
   `eou + ttft + ttfb` summed here. It is the better number — it includes tool
   execution — but it only exists on a real voice call, so text-mode evals report

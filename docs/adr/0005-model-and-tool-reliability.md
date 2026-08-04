@@ -40,9 +40,20 @@ Two more reliability bugs surfaced while fixing this:
 - Reliability went from 3/10 (single run) to **59/60 scenario-runs across 5 full
   passes** of the suite as it now stands (10 scenarios then, 12 now). The
   `--runs N` flag makes that reliability, not a single lucky pass, the reported
-  number — and the one scenario still moving, `unknown_caller` at ~80 %, is
+  number — and the one scenario still moving, `unknown_caller` at 12 of 15
+  (4/5 in the full sweep, 8/10 in a follow-up sweep of that scenario alone), is
   named in the README rather than averaged away.
-- gpt-4.1 costs more and is slower than mini (~740 ms TTFT p50 vs mini's ~half);
-  the README states the tradeoff and the model is one env var to change.
+- **The read-back failure was a tool-output defect, not a prompt defect.** The
+  lookup result named the number with a pronoun, so a digit-by-digit read-back
+  meant recovering it from the transcript and splitting it unaided, several
+  steps after the lookup. It names the number now — still a fact, not an
+  instruction, which is the rule above. Landed in `50079d6`, which is *later*
+  than every commit stamped into `evals/results/`, so the committed 59/60 and
+  12/15 measure the agent before it. No post-fix number is quoted anywhere until
+  `--runs 5` has been re-run and its artifact committed.
+- gpt-4.1 costs more and is slower than mini. Its TTFT p50 is 647.5 ms over 160
+  turns (`evals/results/reliability.json`); no committed sweep measures mini, so
+  no figure for it is quoted. The README states the tradeoff and the model is one
+  env var to change.
 - Because tool outputs no longer carry instructions, the prompt is the single
   source of behaviour — easier to reason about and to test.

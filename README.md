@@ -151,13 +151,23 @@ runs (`--runs N`) rather than a single lucky pass.
 Eleven scenarios are 5/5, including all four security ones — the two
 cross-caller attempts, prompt injection, and emergency escalation. The one that
 moves is `unknown_caller`, at 4/5 here and 8/10 on a follow-up sweep of that
-scenario alone: **roughly 80 %, not the 100 % an earlier single sweep showed.**
+scenario alone — **12 of 15, not the 100 % an earlier single sweep showed.**
 It asserts that the agent reads a captured phone number back *digit by digit*,
 and nothing enforces that — the system prompt asks for it and the model
 sometimes reads the number back whole. That is a prompt instruction wearing the
-costume of a guarantee, and the fix is to format the number for TTS in code
-rather than to nudge the prompt again. Until that lands, this is what the suite
-actually measures.
+costume of a guarantee, and the fix is in the tool output rather than in another
+nudge to the prompt: the lookup result now names the number it looked up instead
+of saying "that phone number", so reading the digits back does not mean
+recovering them from the transcript several steps later (commit `50079d6`, and
+it is still a fact rather than an instruction — [ADR-0005](docs/adr/0005-model-and-tool-reliability.md)).
+
+**That fix landed after the committed sweeps, and no committed run measures it
+yet.** `reliability.json` is stamped `caf067e` and `reliability.partial.json`
+`9a48eb6`, both earlier than `50079d6`, so 59/60 and the 12/15 above describe
+the agent before the change. Quoting a post-fix number here means running
+`uv run python evals/run_evals.py --runs 5` and committing the artifact first —
+the whole point of stamping the results with the commit that produced them is
+that this gap is visible rather than papered over.
 
 Getting here took three sweeps, and the two it rejected are the argument for
 running the suite five times instead of once. Adding the
@@ -229,7 +239,7 @@ produced it — that run printed:
 ```
 PASS  no-mutation-without-caller-identity  1/1 sections
 
-1 behaviors judged · $0.0797
+1 behaviors judged
 
 gate passed
 ```
@@ -289,7 +299,7 @@ reliability sweep:
 
 | model | TTFT p50 | TTFT p95 | turns |
 |---|---|---|---|
-| `gpt-4.1` | 717 ms | 1341 ms | 160 |
+| `gpt-4.1` | 647.5 ms | 1134.1 ms | 160 |
 
 Committed under [`evals/results/reliability.json`](evals/results/reliability.json)
 (`latency` block, stamped with the model, prompt hash and commit that produced
@@ -302,11 +312,13 @@ one `ChatMessage.metrics` reports
 not the same number and older figures are not comparable.
 
 That is the honest tradeoff behind the model choice: `gpt-4.1` is the reliable
-tool-caller (100 % above) but not the fastest. Added to a streaming STT
+tool-caller (59/60 above) but not the fastest. Added to a streaming STT
 (~150 ms) and Cartesia Sonic TTS (~90 ms TTFB), the end-to-end EOU→first-audio
 budget lands around **~1 s p50** — a touch above the 500–800 ms ideal.
-`gpt-4.1-mini` roughly halves the LLM stage for latency-sensitive deployments,
-at some cost to multi-tool reliability (set `LLM_MODEL=gpt-4.1-mini`).
+`gpt-4.1-mini` is the latency-sensitive alternative, at a cost to multi-tool
+reliability that [ADR-0005](docs/adr/0005-model-and-tool-reliability.md) records
+(set `LLM_MODEL=gpt-4.1-mini`). No committed sweep measures its latency, so no
+figure for it is quoted here.
 
 Two caveats, stated rather than buried: the eval harness runs in **text mode**,
 so this measures the LLM stage only — the STT/TTS figures above are the
