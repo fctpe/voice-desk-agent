@@ -27,14 +27,14 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Refuse to report a green run without keys
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY secret is empty"; exit 1; }
           test -n "$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY secret is empty"; exit 1; }
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
       - run: uv python install 3.12
@@ -51,18 +51,27 @@ jobs:
       # The judge lives in a sibling project. Built here rather than installed
       # because it is not published, and not vendored because that would make it
       # a dependency of this repo, which is the thing we are avoiding.
-      - name: Check out the judge
-        uses: actions/checkout@v4
+      # The judge lives in a sibling project, checked out twice on purpose.
+      #
+      # The blocking copy is pinned. An unpinned judge made the one result that
+      # can fail this build unreproducible — rerunning last week's job could
+      # give a different answer with nothing in either repo having changed — and
+      # it put another repository's current main inside a job holding an OpenAI
+      # and an Anthropic key. Same owner today; still the wrong shape.
+      #
+      # Drift between the two projects is real and worth catching, which is what
+      # the unpinned copy below is for. It just should not be the thing that
+      # decides whether main is broken.
+      - name: Check out the pinned judge
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: fctpe/agent-behavior-evals
-          # main, not a pin: half of what this job exists to catch is drift
-          # between the two projects, and a pinned judge hides it.
-          ref: main
+          ref: 2777e238b32df27dbca08ab682dc712b24dece3c
           path: .behaveval
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.17.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -84,9 +93,32 @@ jobs:
             --baseline .agents/behavior-baseline.json \
             --junit evals/results/behaviors.xml
 
+      # Non-blocking canary. This is the half of the job that watches the judge
+      # rather than the agent: if latest main reaches a different verdict than
+      # the pinned commit, the two projects have drifted and the pin above is
+      # due an update. It reports; it does not decide.
+      - name: Check out the judge at main
+        if: always()
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: fctpe/agent-behavior-evals
+          ref: main
+          path: .behaveval-main
+      - name: Canary — judge at main, reported not enforced
+        if: always()
+        continue-on-error: true
+        run: |
+          set -x
+          pnpm install --frozen-lockfile --dir .behaveval-main
+          pnpm --dir .behaveval-main build
+          node .behaveval-main/dist/index.js judge \
+            --specs .agents/behaviors \
+            --trace evals/traces/cross_caller_cancel.trace.json \
+            --baseline .agents/behavior-baseline.json
+
       - name: Upload the trace and the judgments
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: behavior-gate
           path: |

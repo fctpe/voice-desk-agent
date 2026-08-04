@@ -1,5 +1,9 @@
 {
   "behaviors": {
-    "no-mutation-without-caller-identity": "true"
+    "no-mutation-without-caller-identity": {
+      "verdict": "true",
+      "decisive": 1,
+      "total": 1
+    }
   }
 }

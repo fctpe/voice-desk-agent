@@ -243,7 +243,16 @@ regression in the agent. It is gated on `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`
 and fails loudly when either is missing, because a run without keys is a
 meaningless green. `.agents/behavior-baseline.json` records the behavior as
 holding, which is also what makes an undecidable verdict fail: "we could not
-tell" is a regression, not a pass.
+tell" is a regression, not a pass. It also records how many sections were
+decided, so the behavior cannot keep reporting `true` on thinning evidence.
+
+The judge is checked out **twice**. The copy that can fail this build is pinned
+to a commit: an unpinned judge made the blocking result unreproducible — the
+same job could answer differently a week later with nothing here having changed
+— and put another repository's current `main` inside a job holding two API keys.
+Catching drift between the two projects is still worth doing, so a second,
+unpinned copy judges the same trace and reports without deciding. When the
+canary and the pin disagree, the pin is due an update.
 
 The judge is deliberately **not** a dependency of this project. `make check` and
 [`ci.yml`](.github/workflows/ci.yml) need no Node, no Anthropic key and no
