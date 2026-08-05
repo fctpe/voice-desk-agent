@@ -98,3 +98,12 @@ never mints it.
   with ten scenarios and prompt hash `25626d2cf31681b9`. This ADR adds two
   scenarios and a prompt rule, so that number does not describe the current tree:
   re-measure with `uv run python evals/run_evals.py --runs 5` before quoting it.
+- **Scoping the rule took three sweeps, and the two it rejected are the argument
+  for `--runs 5`.** Adding the identity rule at all dropped `happy_booking` to
+  3/5: told to call `identify_caller` first when *changing* an appointment, the
+  model generalised it to new bookings and spent a turn asking for a number
+  instead of checking availability. Scoping the rule fixed that and broke
+  something else — "booking needs no identification first" read as licence to
+  skip the read-back, and `unknown_caller` fell to 1/5, for a net 56/60.
+  Constraining the rule to *ordering* alone is what holds at 59/60. A single
+  green run would have shipped either intermediate state.

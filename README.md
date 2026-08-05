@@ -23,7 +23,25 @@ reproducibly.
 
 ![demo: the eval scenarios and the reliability result](docs/demo.gif)
 
----
+## Quickstart (console, one key)
+
+You need [uv](https://docs.astral.sh/uv/) and an `OPENAI_API_KEY`.
+
+```bash
+uv sync                              # create the environment
+cp .env.example .env                 # then put your OPENAI_API_KEY in .env
+uv run python -m voice_desk console  # talk to Riley in your terminal
+```
+
+That's it — the default `openai` stack needs nothing else. Speak, and Riley
+answers. Without a key, the console exits immediately with a one-line hint
+instead of a traceback.
+
+Prefer the lower-latency pipeline? Set `VOICE_DESK_STACK=full` and add
+`DEEPGRAM_API_KEY` + `CARTESIA_API_KEY`.
+
+`make console` · `make test` (67 unit tests, fully offline) · `make eval` ·
+`make lint`.
 
 ## Architecture
 
@@ -45,36 +63,10 @@ flowchart LR
 ```
 
 The pipeline is **provider-agnostic** and chosen from the environment. Two
-presets:
-
-- **`openai`** (default): OpenAI for STT + LLM + TTS — a single `OPENAI_API_KEY`
-  runs everything. Zero friction.
-- **`full`**: Deepgram STT (nova-3) + OpenAI LLM + Cartesia TTS (sonic-3) — lower
-  latency and per-stage cost visibility ([ADR-0002](docs/adr/0002-pipeline-over-speech-to-speech.md)).
-
----
-
-## Quickstart (console, one key)
-
-You need [uv](https://docs.astral.sh/uv/) and an `OPENAI_API_KEY`.
-
-```bash
-uv sync                              # create the environment
-cp .env.example .env                 # then put your OPENAI_API_KEY in .env
-uv run python -m voice_desk console  # talk to Riley in your terminal
-```
-
-That's it — the default `openai` stack needs nothing else. Speak, and Riley
-answers. Without a key, the console exits immediately with a one-line hint
-instead of a traceback.
-
-Prefer the lower-latency pipeline? Set `VOICE_DESK_STACK=full` and add
-`DEEPGRAM_API_KEY` + `CARTESIA_API_KEY`.
-
-Common commands are wrapped in the `Makefile` (`make console`, `make test`,
-`make eval`, `make lint`).
-
----
+presets: **`openai`** (default) runs STT + LLM + TTS off a single
+`OPENAI_API_KEY`; **`full`** uses Deepgram STT (nova-3) + OpenAI LLM + Cartesia
+TTS (sonic-3) for lower latency and per-stage cost visibility
+([ADR-0002](docs/adr/0002-pipeline-over-speech-to-speech.md)).
 
 ## Tools
 
@@ -92,8 +84,6 @@ the primary guard against a model inventing a time.
 | `take_message(name, phone, message, urgent)` | Human escalation — "I'll pass this to Mr. Miller right away." |
 | `send_confirmation(phone)` | Write an `.ics` confirmation to the outbox for a booking made in this call. |
 
----
-
 ## Conversation correctness
 
 The behaviours that make a voice front desk trustworthy are hand-designed in the
@@ -103,10 +93,13 @@ prompt and enforced by the tools + evals:
   booking refuses anything it did not hand out this call.
 - **An appointment belongs to its caller.** The call is bound to one number —
   SIP caller-ID on a real trunk, otherwise the first number the caller gives to
-  `identify_caller` — and cancel/reschedule refuse any other number, spoken as a
-  plain "I can only do that for your own number". Booking never sets that
-  identity, so no caller can grant themselves one by booking under a number they
-  do not own ([ADR-0006](docs/adr/0006-caller-identity-binding.md)).
+  `identify_caller` — and cancel/reschedule refuse any other number. Booking
+  never sets that identity, so no caller can grant themselves one by booking
+  under a number they do not own. **Off a trunk, that identity is only as strong
+  as the caller's first claim**: bind-once stops a caller switching numbers
+  mid-call, not one who states the victim's number from the first sentence — only
+  real caller-ID does, and only a real trunk supplies it
+  ([ADR-0006](docs/adr/0006-caller-identity-binding.md), [SECURITY.md](SECURITY.md)).
 - **Read-backs.** Phone numbers are read back digit by digit; uncertain names
   are spelled letter by letter; bookings are confirmed as a concrete date/time.
 - **Relative dates are made concrete.** "next Tuesday" is confirmed as an actual
@@ -119,16 +112,14 @@ prompt and enforced by the tools + evals:
 - **Degrades gracefully.** Provider outages become a calm spoken apology and an
   offer to take a message — never a dropped call.
 
----
-
 ## Evals
 
 Twelve multi-turn scenarios drive the **real** agent and tools over text using
 LiveKit's native testing API (`AgentSession.run` + `result.expect...` +
 LLM-`judge`), with the deterministic fakes underneath
 ([ADR-0003](docs/adr/0003-native-text-evals.md)). Each scenario asserts the tool
-calls the agent actually made and runs an LLM judge over the whole transcript
-for task completion (`gpt-4o-mini` judge, decoupled from the agent model).
+calls the agent actually made and runs an LLM judge over the whole transcript for
+task completion (`gpt-4o-mini` judge, decoupled from the agent model).
 
 ```bash
 uv run python evals/run_evals.py --list    # the 12 scenarios, zero LLM calls
@@ -146,77 +137,44 @@ cross-caller cancellation attempt · cross-caller reschedule attempt.
 
 **59 / 60 scenario-runs — 5 full passes of all 12 scenarios.** A real LLM agent
 is not perfectly deterministic, so the harness reports reliability over repeated
-runs (`--runs N`) rather than a single lucky pass.
+runs (`--runs N`) rather than a single lucky pass. Two intermediate versions of
+the identity rule each passed a single run and failed the sweep, which is why the
+suite runs five times ([ADR-0006](docs/adr/0006-caller-identity-binding.md)).
 
 Eleven scenarios are 5/5, including all four security ones — the two
 cross-caller attempts, prompt injection, and emergency escalation. The one that
 moves is `unknown_caller`, at 4/5 here and 8/10 on a follow-up sweep of that
-scenario alone — **12 of 15, not the 100 % an earlier single sweep showed.**
-It asserts that the agent reads a captured phone number back *digit by digit*,
-and nothing enforces that — the system prompt asks for it and the model
-sometimes reads the number back whole. That is a prompt instruction wearing the
-costume of a guarantee, and the fix is in the tool output rather than in another
-nudge to the prompt: the lookup result now names the number it looked up instead
-of saying "that phone number", so reading the digits back does not mean
-recovering them from the transcript several steps later (commit `50079d6`, and
-it is still a fact rather than an instruction — [ADR-0005](docs/adr/0005-model-and-tool-reliability.md)).
+scenario alone — **12 of 15, not the 100 % an earlier single sweep showed.** It
+asserts that the agent reads a captured phone number back *digit by digit*, and
+nothing enforces that — the system prompt asks for it and the model sometimes
+reads the number back whole. That is a prompt instruction wearing the costume of
+a guarantee, and the fix is in the tool output rather than in another nudge to
+the prompt: the lookup result now names the number it looked up instead of saying
+"that phone number" (commit `50079d6` — still a fact rather than an instruction,
+[ADR-0005](docs/adr/0005-model-and-tool-reliability.md)).
 
-**That fix landed after the committed sweeps, and no committed run measures it
-yet.** `reliability.json` is stamped `caf067e` and `reliability.partial.json`
-`9a48eb6`, both earlier than `50079d6`, so 59/60 and the 12/15 above describe
-the agent before the change. Quoting a post-fix number here means running
-`uv run python evals/run_evals.py --runs 5` and committing the artifact first —
-the whole point of stamping the results with the commit that produced them is
-that this gap is visible rather than papered over.
+**That fix landed after the committed sweeps, so no committed run measures it
+yet** — 59/60 and the 12/15 above describe the agent before the change. Every
+result file is stamped with the commit that produced it precisely so this gap is
+visible rather than papered over.
 
-Getting here took three sweeps, and the two it rejected are the argument for
-running the suite five times instead of once. Adding the
-[ADR-0006](docs/adr/0006-caller-identity-binding.md) identity rule dropped
-`happy_booking` to 3/5: told to call `identify_caller` first when *changing* an
-appointment, the model generalised it to new bookings and spent a turn asking
-for a number instead of checking availability. Scoping the rule fixed that and
-broke something else — "booking needs no identification first" read as licence
-to skip the read-back, and `unknown_caller` fell to 1/5 for a net 56/60.
-Constraining the rule to *ordering* alone is what holds. A single green run
-would have shipped either intermediate state — and, as the sweep above shows,
-a single green run is also what produced the 60/60 this section used to claim.
-
-Getting there was eval-driven, and every fix is in the git history:
-
-1. **The agent hallucinated bookings.** `gpt-4o-mini` narrated "we have 9 AM
-   available" and "you're all booked" *without ever calling the tools*. Switched
-   to `gpt-4.1` with sequential tool calls — the config LiveKit's own frontdesk
-   example uses — which is the documented 2026 choice for multi-step voice
-   tool-calling. This is exactly the failure the slot-id anti-hallucination guard
-   and this harness exist to catch.
-2. **A booking turn hit a hidden cap.** `identify → check → book → confirm` is
-   four tool steps in one turn, but `AgentSession.max_tool_steps` defaults to 3,
-   silently truncating the chain and dropping the booking. Raised to 8.
-3. **Tool outputs caused re-call loops.** Return values that embedded
-   instructions ("now call book_appointment…") were read as directives to
-   re-call. Rewrote every tool to return plain facts; behavioural rules live in
-   the system prompt.
-4. **Over-confirmation blocked bookings.** The agent kept adding "let me confirm
-   the spelling" turns after the caller already said "book it". Made booking
-   decisive once consent + details are present.
-5. **Transient API timeouts** are absorbed by a 60 s timeout + 5 retries so a
-   network hiccup never counts as an agent failure.
+Model, tool-step limit and tool-output style were all chosen from eval failures
+rather than from taste — `gpt-4o-mini` narrated bookings it never made, a hidden
+`max_tool_steps=3` truncated the four-call booking chain, and tool outputs
+carrying imperatives drove re-call loops
+([ADR-0005](docs/adr/0005-model-and-tool-reliability.md)).
 
 ### Behavior gate
 
-A scenario check asks *did the agent call the right tools and finish the job*.
-It cannot ask *was that mutation authorised* — so the identity rule is also
-written down as an executable behavior spec,
+A scenario check asks *did the agent call the right tools and finish the job*. It
+cannot ask *was that mutation authorised* — so the identity rule is also written
+down as an executable behavior spec,
 [`.agents/behaviors/no-mutation-without-caller-identity/BEHAVIOR.md`](.agents/behaviors/no-mutation-without-caller-identity/BEHAVIOR.md),
 in Braintrust's [`.agents/behaviors/`](https://github.com/braintrustdata/agentbehavior)
 format, and judged against a recorded trace by
 [agent-behavior-evals](https://github.com/fctpe/agent-behavior-evals).
-
-`--export-trace` writes the session's chat history — the caller's turns, every
-tool call with its arguments, every tool result — in the flat event shape that
-project's `fromLiveKitEvents` reads. Nothing here imports the reader, so
-`tests/test_trace_export.py` pins the exported fields to the ones it consumes,
-offline and with no key.
+`--export-trace` writes the session's chat history in the flat event shape that
+project reads; `tests/test_trace_export.py` pins the exported fields offline.
 
 ```bash
 # the judge is a sibling checkout, not a dependency of this repo
@@ -234,97 +192,58 @@ node ../agent-behavior-evals/dist/index.js judge \
 Against the committed trace
 [`evals/traces/cross_caller_cancel.trace.json`](evals/traces/cross_caller_cancel.trace.json)
 — a real `gpt-4.1` run, stamped with the model, prompt hash and commit that
-produced it — that run printed:
+produced it — that prints `PASS no-mutation-without-caller-identity 1/1 sections`
+and writes [`evals/results/behaviors.xml`](evals/results/behaviors.xml).
 
-```
-PASS  no-mutation-without-caller-identity  1/1 sections
-
-1 behaviors judged
-
-gate passed
-```
-
-and wrote [`evals/results/behaviors.xml`](evals/results/behaviors.xml).
-
-[`.github/workflows/behavior-gate.yml`](.github/workflows/behavior-gate.yml) runs
-both halves weekly, recording a **fresh** trace rather than replaying the
-committed one: a frozen fixture can only catch drift in the judge, never a
-regression in the agent. It is gated on `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`
-and fails loudly when either is missing, because a run without keys is a
-meaningless green. `.agents/behavior-baseline.json` records the behavior as
-holding, which is also what makes an undecidable verdict fail: "we could not
-tell" is a regression, not a pass. It also records how many sections were
-decided, so the behavior cannot keep reporting `true` on thinning evidence.
-
-The judge is checked out **twice**. The copy that can fail this build is pinned
-to a commit: an unpinned judge made the blocking result unreproducible — the
-same job could answer differently a week later with nothing here having changed
-— and put another repository's current `main` inside a job holding two API keys.
-Catching drift between the two projects is still worth doing, so a second,
-unpinned copy judges the same trace and reports without deciding. When the
-canary and the pin disagree, the pin is due an update.
-
-The judge is deliberately **not** a dependency of this project. `make check` and
-[`ci.yml`](.github/workflows/ci.yml) need no Node, no Anthropic key and no
-network.
-
----
+[`behavior-gate.yml`](.github/workflows/behavior-gate.yml) runs this weekly against
+a **fresh** trace rather than the committed one, because a frozen fixture can only
+catch drift in the judge, never a regression in the agent. It is gated on both API
+keys and fails loudly when either is missing. The baseline records the behavior as
+holding *and* how many sections were decided, so an undecidable verdict and
+thinning evidence are both regressions rather than passes. The judge is checked out
+twice — a pinned copy that decides, an unpinned canary that only reports
+([ADR-0008](docs/adr/0008-behavior-judge-pinned-and-canary.md)) — and is not a
+dependency of this project: `make check` and [`ci.yml`](.github/workflows/ci.yml)
+need no Node and no network.
 
 ## Latency
 
-For a call to feel human, the reply has to start fast. The comfortable
-turn-taking window in human conversation is roughly **500–800 ms** from the
-moment you stop talking to the first sound of the response; much beyond that and
-the call feels laggy. Riley measures the budget that governs this:
-
-```
-EOU -> first audio  =  end_of_utterance_delay + LLM TTFT + TTS TTFB
-```
-
-The stages, and the end-to-end number itself, come from LiveKit's
-`ChatMessage.metrics` — one report per message, with the SDK's own
-`e2e_latency` as the budget (it includes the tool round-trips, which summing the
-three stages does not). Token and audio totals per model come from
-`session_usage_updated`, so the **cost** of a call is in the same report as its
-latency. Both replace the deprecated `metrics_collected`
+For a call to feel human, the reply has to start fast — the comfortable
+turn-taking window in human conversation is roughly **500–800 ms** from the moment
+you stop talking to the first sound of the response. Riley measures the budget
+that governs it, `EOU → first audio = end_of_utterance_delay + LLM TTFT + TTS
+TTFB`, from LiveKit's `ChatMessage.metrics`, with the SDK's own `e2e_latency` as
+the budget (it includes tool round-trips, which summing the three stages does
+not). Token and audio totals come from `session_usage_updated`, so the **cost** of
+a call is in the same report as its latency
 ([ADR-0007](docs/adr/0007-opentelemetry-genai.md)). At the end of a call Riley
-prints a p50/p95 + tokens line and writes a JSON report to the metrics directory
-(`metrics.py`).
+prints a p50/p95 + tokens line and writes a JSON report (`metrics.py`).
 
 ### Measured
 
-The **LLM** stage — the largest and the one under our control — captured by the
-same `metrics.py` collector the live agent uses, over every agent turn of the
-reliability sweep:
+**The eval harness runs in text mode, so what follows measures the LLM stage
+only.** TTFT here is the model call that produced the turn's reply text, over
+every agent turn of the reliability sweep, captured by the same `metrics.py`
+collector the live agent uses:
 
 | model | TTFT p50 | TTFT p95 | turns |
 |---|---|---|---|
 | `gpt-4.1` | 647.5 ms | 1134.1 ms | 160 |
 
 Committed under [`evals/results/reliability.json`](evals/results/reliability.json)
-(`latency` block, stamped with the model, prompt hash and commit that produced
-it). Reproduce with `uv run python evals/run_evals.py --runs 5`.
+(`latency` block, stamped with the model, prompt hash and commit). Reproduce with
+`uv run python evals/run_evals.py --runs 5`.
 
-TTFT here means the model call that produced the turn's reply text, which is the
-one `ChatMessage.metrics` reports
-([ADR-0007](docs/adr/0007-opentelemetry-genai.md)). An earlier revision measured
-*the first* call of a turn; a booking turn makes four tool calls, so the two are
-not the same number and older figures are not comparable.
-
-That is the honest tradeoff behind the model choice: `gpt-4.1` is the reliable
-tool-caller (59/60 above) but not the fastest. Added to a streaming STT
-(~150 ms) and Cartesia Sonic TTS (~90 ms TTFB), the end-to-end EOU→first-audio
-budget lands around **~1 s p50** — a touch above the 500–800 ms ideal.
-`gpt-4.1-mini` is the latency-sensitive alternative, at a cost to multi-tool
-reliability that [ADR-0005](docs/adr/0005-model-and-tool-reliability.md) records
-(set `LLM_MODEL=gpt-4.1-mini`). No committed sweep measures its latency, so no
-figure for it is quoted here.
-
-Two caveats, stated rather than buried: the eval harness runs in **text mode**,
-so this measures the LLM stage only — the STT/TTS figures above are the
-providers' published streaming TTFBs, not measurements. And the full
-EOU→first-audio number is captured per call by `metrics.py` during a real voice
-call, which is not something a committed artifact in this repo can prove.
+Adding a streaming STT (~150 ms) and Cartesia Sonic TTS (~90 ms TTFB) — **the
+providers' published streaming TTFBs, not measurements here** — the end-to-end
+EOU→first-audio budget lands around **~1 s p50**, a touch above the 500–800 ms
+ideal. The real EOU→first-audio number is captured per call by `metrics.py`
+during a live voice call, which is not something a committed artifact in this
+repo can prove. That is the honest tradeoff behind the model choice: `gpt-4.1` is
+the reliable tool-caller (59/60 above) but not the fastest. `gpt-4.1-mini` is the
+latency-sensitive alternative at a cost to multi-tool reliability
+([ADR-0005](docs/adr/0005-model-and-tool-reliability.md)); no committed sweep
+measures its latency, so no figure for it is quoted.
 
 ### Tracing (opt-in)
 
@@ -334,16 +253,9 @@ a span per agent turn, per model call and per tool call — correlated by
 `output_tokens` and `gen_ai.tool.name` on the spans a GenAI-aware backend reads.
 LiveKit 1.6 emits most of that itself once a provider is installed, so Riley
 installs one and fills the gaps rather than shipping a second span tree over the
-same call.
-
-Leave the variable unset and it is off: no exporter, no tracer provider, so
-LiveKit's spans are non-recording and go nowhere. The OTel SDK and OTLP exporter
-are still imported either way — livekit-agents loads them at module scope, 17
-`opentelemetry.exporter.otlp` modules' worth, measured in
-[ADR-0007](docs/adr/0007-opentelemetry-genai.md). Running the agent never needs a
-collector.
-
----
+same call. Leave the variable unset and it is off — no exporter, no tracer
+provider, so LiveKit's spans are non-recording and go nowhere
+([ADR-0007](docs/adr/0007-opentelemetry-genai.md)).
 
 ## Limitations (by design and honest)
 
@@ -355,19 +267,17 @@ collector.
   number via LiveKit SIP + Twilio/Telnyx is sketched in
   [docs/telephony.md](docs/telephony.md) but intentionally not wired.
 - **Console identity is self-asserted.** With no trunk there is no caller-ID to
-  bind, so in the console the call's identity is simply the first number the
-  caller says. That stops a caller switching numbers mid-call to reach someone
-  else's appointment, but not one who states the wrong number from the start —
-  only real caller-ID does, and only a real trunk supplies it. Set `SIP_TRUNK=1`
-  on a trunk and self-assertion is off entirely: a call whose caller-ID never
-  arrives can book and leave messages but change nothing
+  bind, so the call's identity is the first number the caller says. That stops a
+  caller switching numbers mid-call to reach someone else's appointment, but not
+  one who states the wrong number from the start. Set `SIP_TRUNK=1` on a trunk
+  and self-assertion is off entirely: a call whose caller-ID never arrives can
+  book and leave messages but change nothing
   ([ADR-0006](docs/adr/0006-caller-identity-binding.md)).
 - **The GenAI trace conventions are not stable yet.** As of July 2026 they are
-  still Development status — the `gen_ai.*` registry ships only under
-  `opentelemetry.semconv._incubating`, and there is no tagged conventions release
-  to pin against. Riley uses the settled model-call attributes and declines to
-  invent the experimental agent ones, so a future rename is a find-and-replace
-  rather than a re-instrumentation ([ADR-0007](docs/adr/0007-opentelemetry-genai.md)).
+  still Development status, with no tagged release to pin against. Riley uses the
+  settled model-call attributes and declines to invent the experimental agent
+  ones, so a future rename is a find-and-replace rather than a re-instrumentation
+  ([ADR-0007](docs/adr/0007-opentelemetry-genai.md)).
 - **English-only (v1).** Positioned for a global English audience; multilingual
   is a roadmap item with its own eval suite, not an untested bolt-on
   ([ADR-0004](docs/adr/0004-english-only-v1.md)).
@@ -375,20 +285,16 @@ collector.
   (`TURN_DETECTION=model`) is supported but needs LiveKit inference credentials;
   the offline default is Silero VAD endpointing.
 
----
-
 ## Development
 
 ```bash
-make check     # ruff check + ruff format --check + pytest (all offline)
+make check     # ruff check + ruff format --check + pytest (67 tests, all offline)
 ```
 
-The unit suite runs fully offline; an autouse fixture fails any test that opens
-a network socket.
-
-Security posture (caller-identity binding and its off-trunk weakness, the
-slot-id guard, what the transcripts and outbox hold) is in
-[SECURITY.md](SECURITY.md).
+An autouse fixture fails any test that opens a network socket. Design decisions
+are recorded in [`docs/adr/`](docs/adr). Security posture — caller-identity
+binding and its off-trunk weakness, the slot-id guard, what the transcripts and
+outbox hold — is in [SECURITY.md](SECURITY.md).
 
 ## A note on AI usage
 

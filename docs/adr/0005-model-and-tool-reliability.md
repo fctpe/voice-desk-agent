@@ -57,3 +57,8 @@ Two more reliability bugs surfaced while fixing this:
   env var to change.
 - Because tool outputs no longer carry instructions, the prompt is the single
   source of behaviour — easier to reason about and to test.
+- **Booking is decisive once consent and details are present.** An earlier prompt
+  kept adding "let me confirm the spelling" turns after the caller had already
+  said "book it", which the scenario judge scored as an incomplete task. The
+  read-backs the prompt does require are enumerated; anything outside that list
+  is not a reason to spend another turn.
