@@ -50,7 +50,7 @@ Two more reliability bugs surfaced while fixing this:
   before the change to 29 of 30 after (24/25 in single-scenario runs, 5/5 in the
   sweep). The committed `reliability.json` postdates `50079d6`, so the
   comparison rests on two artifacts rather than on one and a memory.
-- gpt-4.1 costs more and is slower than mini. Its TTFT p50 is 790.6 ms over 160
+- gpt-4.1 costs more and is slower than mini. Its TTFT p50 is 766.1 ms over 160
   turns (`evals/results/reliability.json`); no committed sweep measures mini, so
   no figure for it is quoted. The README states the tradeoff and the model is one
   env var to change.

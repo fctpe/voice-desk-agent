@@ -227,7 +227,7 @@ collector the live agent uses:
 
 | model | TTFT p50 | TTFT p95 | turns |
 |---|---|---|---|
-| `gpt-4.1` | 790.6 ms | 2066.3 ms | 160 |
+| `gpt-4.1` | 766.1 ms | 1341.6 ms | 160 |
 
 Committed under [`evals/results/reliability.json`](evals/results/reliability.json)
 (`latency` block, stamped with the model, prompt hash and commit). Reproduce with
