@@ -100,7 +100,7 @@ literals rather than importing the semconv package.
   `ChatMessage.metrics` reports. A booking turn makes four tool calls, so these
   are different numbers and figures from before the change are not comparable.
   `evals/results/reliability.json` now holds a `--runs 5` sweep taken under the
-  new definition — p50 647.5 ms, p95 1134.1 ms over 160 turns — so the warning
+  new definition — p50 790.6 ms, p95 2066.3 ms over 160 turns — so the warning
   that used to sit here is closed.
 - `response_ms` is now `e2e_latency` from the SDK rather than
   `eou + ttft + ttfb` summed here. It is the better number — it includes tool

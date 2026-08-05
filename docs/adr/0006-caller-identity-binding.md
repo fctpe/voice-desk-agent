@@ -105,5 +105,6 @@ never mints it.
   instead of checking availability. Scoping the rule fixed that and broke
   something else — "booking needs no identification first" read as licence to
   skip the read-back, and `unknown_caller` fell to 1/5, for a net 56/60.
-  Constraining the rule to *ordering* alone is what holds at 59/60. A single
+  Constraining the rule to *ordering* alone is what holds; the suite reads 60/60
+  since the read-back fix (ADR-0005). A single
   green run would have shipped either intermediate state.

@@ -135,28 +135,27 @@ cross-caller cancellation attempt · cross-caller reschedule attempt.
 
 ### Results (live, `gpt-4.1`, committed under [`evals/results/`](evals/results))
 
-**59 / 60 scenario-runs — 5 full passes of all 12 scenarios.** A real LLM agent
-is not perfectly deterministic, so the harness reports reliability over repeated
-runs (`--runs N`) rather than a single lucky pass. Two intermediate versions of
-the identity rule each passed a single run and failed the sweep, which is why the
-suite runs five times ([ADR-0006](docs/adr/0006-caller-identity-binding.md)).
+**60 / 60 scenario-runs — 5 full passes of all 12 scenarios**, including all four
+security ones: the two cross-caller attempts, prompt injection, and emergency
+escalation. A real LLM agent is not perfectly deterministic, so the harness
+reports reliability over repeated runs (`--runs N`) rather than a single pass.
+Two intermediate versions of the identity rule each passed a single run and
+failed the sweep, which is why the suite runs five times
+([ADR-0006](docs/adr/0006-caller-identity-binding.md)).
 
-Eleven scenarios are 5/5, including all four security ones — the two
-cross-caller attempts, prompt injection, and emergency escalation. The one that
-moves is `unknown_caller`, at 4/5 here and 8/10 on a follow-up sweep of that
-scenario alone — **12 of 15, not the 100 % an earlier single sweep showed.** It
-asserts that the agent reads a captured phone number back *digit by digit*, and
-nothing enforces that — the system prompt asks for it and the model sometimes
-reads the number back whole. That is a prompt instruction wearing the costume of
-a guarantee, and the fix is in the tool output rather than in another nudge to
-the prompt: the lookup result now names the number it looked up instead of saying
-"that phone number" (commit `50079d6` — still a fact rather than an instruction,
-[ADR-0005](docs/adr/0005-model-and-tool-reliability.md)).
+Read that 100 % with the caution this repo argues for everywhere else: one sweep
+of five passes is 60 draws, not proof of determinism. The scenario that used to
+move is `unknown_caller`, which asserts the agent reads a captured phone number
+back digit by digit. It sat at 12 of 15 before the tool output was changed, and
+29 of 30 after — 24/25 in single-scenario runs plus 5/5 in the sweep above.
 
-**That fix landed after the committed sweeps, so no committed run measures it
-yet** — 59/60 and the 12/15 above describe the agent before the change. Every
-result file is stamped with the commit that produced it precisely so this gap is
-visible rather than papered over.
+The fix was in the tool output rather than in another nudge to the prompt: the
+lookup result now names the number it looked up instead of saying "that phone
+number", so reading it back no longer means recovering the digits from the
+transcript several steps later. Still a fact rather than an instruction
+([ADR-0005](docs/adr/0005-model-and-tool-reliability.md)). Every result file is
+stamped with the commit that produced it, and this one postdates that change —
+which is what makes the comparison above mean anything.
 
 Model, tool-step limit and tool-output style were all chosen from eval failures
 rather than from taste — `gpt-4o-mini` narrated bookings it never made, a hidden
@@ -228,7 +227,7 @@ collector the live agent uses:
 
 | model | TTFT p50 | TTFT p95 | turns |
 |---|---|---|---|
-| `gpt-4.1` | 647.5 ms | 1134.1 ms | 160 |
+| `gpt-4.1` | 790.6 ms | 2066.3 ms | 160 |
 
 Committed under [`evals/results/reliability.json`](evals/results/reliability.json)
 (`latency` block, stamped with the model, prompt hash and commit). Reproduce with
@@ -240,7 +239,7 @@ EOU→first-audio budget lands around **~1 s p50**, a touch above the 500–800 
 ideal. The real EOU→first-audio number is captured per call by `metrics.py`
 during a live voice call, which is not something a committed artifact in this
 repo can prove. That is the honest tradeoff behind the model choice: `gpt-4.1` is
-the reliable tool-caller (59/60 above) but not the fastest. `gpt-4.1-mini` is the
+the reliable tool-caller (60/60 above) but not the fastest. `gpt-4.1-mini` is the
 latency-sensitive alternative at a cost to multi-tool reliability
 ([ADR-0005](docs/adr/0005-model-and-tool-reliability.md)); no committed sweep
 measures its latency, so no figure for it is quoted.
